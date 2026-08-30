@@ -1,9 +1,14 @@
-//! Trains page (slot 1): live Egham departures across three directions --
-//! towards Waterloo, towards Reading, and towards Woking (via Chertsey and
-//! Weybridge -- a distinct service from the Reading one, easy to miss since
-//! both start out "away from London" through Egham). The first plugin built
-//! on the framework in `crate::plugin` -- everything below this module's own
-//! header is trains-specific; the bottom status bar comes from
+//! Trains page (slot 1): live Egham departures by physical platform, not by
+//! ultimate destination. Egham has exactly two platforms -- Platform 1
+//! (east, towards London Waterloo) and Platform 2 (west, towards Reading,
+//! Ascot, Chertsey, Woking and everything beyond) -- so a westbound train's
+//! specific destination (Reading one service, Woking via Chertsey the next)
+//! doesn't change which platform it leaves from. Earlier versions of this
+//! page split westbound trains into separate per-destination columns; that
+//! was wrong (a passenger stands on a platform, not in front of a
+//! destination) and silently made the Woking/Chertsey services invisible
+//! when only the Reading-filtered query was fetched. One unfiltered fetch,
+//! split by platform locally, fixes both. The bottom status bar comes from
 //! `plugin::draw_status_bar`, shared with every other page.
 
 use anyhow::Result;
@@ -15,16 +20,11 @@ use imageproc::rect::Rect;
 
 use crate::plugin::{self, Plugin};
 use crate::render::{self, hhmm, text_width, truncate_to_width, Fonts, BLACK, DARK_GRAY, H, LIGHT_GRAY, W, WHITE};
-use crate::rtt::{self, DeparturesResponse};
+use crate::rtt::{self, Departure, DeparturesResponse};
 
 pub const SLOT: u8 = 1;
 const NAME: &str = "Egham Train Times";
 const STATUS_LABEL: &str = "REALTIME TRAINS";
-
-/// (RTT destination CRS code, column header, optional calling-pattern hint).
-/// Order matches left-to-right column order on the panel.
-const DIRECTIONS: [(&str, &str, Option<&str>); 3] =
-    [("WAT", "WATERLOO", None), ("RDG", "READING", None), ("WOK", "WOKING", Some("VIA CHERTSEY"))];
 
 pub struct TrainsPlugin;
 
@@ -40,22 +40,26 @@ impl Plugin for TrainsPlugin {
     fn render<'a>(&'a mut self, fonts: &'a Fonts) -> LocalBoxFuture<'a, Result<(u64, GrayImage)>> {
         Box::pin(async move {
             let access_token = rtt::mint_access_token()?;
-            let mut responses = Vec::with_capacity(DIRECTIONS.len());
-            for (code, _, _) in DIRECTIONS {
-                responses.push(rtt::fetch_departures(&access_token, code)?);
-            }
-            let refs: Vec<&DeparturesResponse> = responses.iter().collect();
-            let fingerprint = rtt::fingerprint(&refs);
-            let img = render_page(fonts, &responses);
+            let all = rtt::fetch_departures(&access_token)?;
+            let fingerprint = rtt::fingerprint(&all);
+            let img = render_page(fonts, &all);
             Ok((fingerprint, img))
         })
     }
 }
 
-fn render_page(fonts: &Fonts, responses: &[DeparturesResponse]) -> GrayImage {
+/// A destination of "London Waterloo" means Platform 1 (east); every other
+/// destination (Reading, Ascot, Chertsey, Woking, ...) leaves from Platform
+/// 2 (west) -- Egham only has the two platforms, so this is exhaustive by
+/// construction, not a guess at which destinations happen to exist today.
+fn is_eastbound(svc: &Departure) -> bool {
+    svc.destination.first().map(|d| d.location.description.contains("Waterloo")).unwrap_or(false)
+}
+
+fn render_page(fonts: &Fonts, all: &DeparturesResponse) -> GrayImage {
     let mut img = GrayImage::from_pixel(W, H, Luma([WHITE]));
 
-    let now_ref = responses[0].query.time_from.as_str();
+    let now_ref = all.query.time_from.as_str();
 
     render::draw_text(&mut img, &fonts.arial_bold, 13.0, 26.0, 22.0 + 13.0, "SOUTH WESTERN RAILWAY", DARK_GRAY);
     render::draw_text(&mut img, &fonts.arial_black, 46.0, 26.0, 36.0 + 46.0, "EGHAM", BLACK);
@@ -71,22 +75,23 @@ fn render_page(fonts: &Fonts, responses: &[DeparturesResponse]) -> GrayImage {
     draw_line_segment_mut(&mut img, (0.0, 101.0), (W as f32, 101.0), Luma([BLACK]));
     draw_line_segment_mut(&mut img, (0.0, 102.0), (W as f32, 102.0), Luma([BLACK]));
 
-    let col_w = W as f32 / DIRECTIONS.len() as f32;
-    for i in 1..DIRECTIONS.len() {
-        let x = i as f32 * col_w;
-        draw_line_segment_mut(&mut img, (x, 108.0), (x, 440.0), Luma([LIGHT_GRAY]));
-    }
+    draw_line_segment_mut(&mut img, (400.0, 108.0), (400.0, 440.0), Luma([LIGHT_GRAY]));
 
-    for (i, (_, label, subtitle)) in DIRECTIONS.iter().enumerate() {
-        let spec = ColumnSpec {
-            x0: i as f32 * col_w,
-            col_w,
-            label,
-            subtitle: *subtitle,
-            arrow_left: i == 0, // WATERLOO (leftmost) points back towards London; every "away" column points out
-        };
-        draw_column(&mut img, fonts, &spec, &responses[i]);
-    }
+    let east: Vec<&Departure> = all.services.iter().filter(|s| is_eastbound(s)).collect();
+    let west: Vec<&Departure> = all.services.iter().filter(|s| !is_eastbound(s)).collect();
+
+    draw_column(
+        &mut img,
+        fonts,
+        &ColumnSpec { x0: 0.0, label: "PLATFORM 1 (EAST)", subtitle: "WATERLOO", arrow_left: true },
+        &east,
+    );
+    draw_column(
+        &mut img,
+        fonts,
+        &ColumnSpec { x0: 400.0, label: "PLATFORM 2 (WEST)", subtitle: "READING / ASCOT / CHERTSEY", arrow_left: false },
+        &west,
+    );
 
     plugin::draw_status_bar(&mut img, fonts, SLOT, hhmm(now_ref), STATUS_LABEL);
     img
@@ -141,47 +146,44 @@ fn draw_triangle(img: &mut GrayImage, cx: f32, cy: f32, size: f32, pointing_righ
 
 struct ColumnSpec<'a> {
     x0: f32,
-    col_w: f32,
     label: &'a str,
-    subtitle: Option<&'a str>,
+    subtitle: &'a str,
     arrow_left: bool,
 }
 
-fn draw_column(img: &mut GrayImage, fonts: &Fonts, spec: &ColumnSpec, data: &DeparturesResponse) {
-    let pad = 20.0;
+fn draw_column(img: &mut GrayImage, fonts: &Fonts, spec: &ColumnSpec, services: &[&Departure]) {
+    let col_w = 400.0;
+    let pad = 24.0;
     let inner_x0 = spec.x0 + pad;
-    let inner_w = spec.col_w - 2.0 * pad;
+    let inner_w = col_w - 2.0 * pad;
 
     let head_y = 126.0;
-    let head_cy = head_y + 11.0;
+    let head_cy = head_y + 9.0;
     if spec.arrow_left {
         draw_triangle(img, inner_x0 + 6.0, head_cy, 12.0, true, BLACK);
-        render::draw_text(img, &fonts.arial_bold, 20.0, inner_x0 + 18.0, head_y + 17.0, spec.label, BLACK);
+        render::draw_text(img, &fonts.arial_bold, 19.0, inner_x0 + 18.0, head_y + 15.0, spec.label, BLACK);
     } else {
-        let tw = text_width(&fonts.arial_bold, 20.0, spec.label);
-        render::draw_text(img, &fonts.arial_bold, 20.0, inner_x0 + inner_w - tw - 18.0, head_y + 17.0, spec.label, BLACK);
+        let tw = text_width(&fonts.arial_bold, 19.0, spec.label);
+        render::draw_text(img, &fonts.arial_bold, 19.0, inner_x0 + inner_w - tw - 18.0, head_y + 15.0, spec.label, BLACK);
         draw_triangle(img, inner_x0 + inner_w - 6.0, head_cy, 12.0, false, BLACK);
     }
-    // A calling-pattern hint (e.g. Woking trains also serving Chertsey and
-    // Weybridge) -- the RTT filter destination alone doesn't say this, and
-    // it's the whole reason this column exists as a third direction instead
-    // of folding into READING.
-    let mut row_y0_offset = 0.0;
-    if let Some(subtitle) = spec.subtitle {
-        render::draw_text(img, &fonts.arial_bold, 12.0, inner_x0, head_y + 32.0, subtitle, DARK_GRAY);
-        row_y0_offset = 14.0;
+    // A destination hint, not an exhaustive list -- each row below still
+    // shows that specific service's real destination. Just tells someone
+    // glancing at the board which platform to stand on before they've read
+    // any individual row.
+    let subtitle = truncate_to_width(&fonts.arial_bold, 12.0, spec.subtitle, inner_w);
+    render::draw_text(img, &fonts.arial_bold, 12.0, inner_x0, head_y + 30.0, &subtitle, DARK_GRAY);
+
+    let services: Vec<_> = services.iter().filter(|s| s.temporal_data.departure.is_some()).take(4).collect();
+
+    let row_y = head_y + 56.0;
+    let row_h = 64.0;
+    let time_col_w = 92.0;
+
+    if services.is_empty() {
+        render::draw_text(img, &fonts.arial_bold, 15.0, inner_x0, row_y + 10.0, "No departures in the next 2h", LIGHT_GRAY);
+        return;
     }
-
-    let services: Vec<_> = data
-        .services
-        .iter()
-        .filter(|s| s.temporal_data.departure.is_some())
-        .take(4)
-        .collect();
-
-    let row_y = head_y + 42.0 + row_y0_offset;
-    let row_h = (68.0 - row_y0_offset / services.len().max(1) as f32).max(56.0);
-    let time_col_w = 76.0;
 
     for (i, svc) in services.iter().enumerate() {
         let dep = svc.temporal_data.departure.as_ref().unwrap();
@@ -196,26 +198,25 @@ fn draw_column(img: &mut GrayImage, fonts: &Fonts, spec: &ColumnSpec, data: &Dep
             draw_line_segment_mut(img, (inner_x0, ry), (inner_x0 + inner_w, ry), Luma([LIGHT_GRAY]));
         }
 
-        let mut ty = ry + if i == 0 { 8.0 } else { 13.0 };
+        let mut ty = ry + if i == 0 { 10.0 } else { 15.0 };
         if i == 0 {
-            draw_filled_rect_mut(img, Rect::at(inner_x0 as i32, (ry + 4.0) as i32).of_size(38, 14), Luma([BLACK]));
-            render::draw_text(img, &fonts.arial_bold, 10.0, inner_x0 + 4.0, ry + 15.0, "NEXT", WHITE);
-            ty = ry + 21.0;
+            draw_filled_rect_mut(img, Rect::at(inner_x0 as i32, (ry + 5.0) as i32).of_size(40, 15), Luma([BLACK]));
+            render::draw_text(img, &fonts.arial_bold, 11.0, inner_x0 + 5.0, ry + 17.0, "NEXT", WHITE);
+            ty = ry + 24.0;
         }
 
         let time_str = hhmm(sched);
         let time_color = if cancelled { DARK_GRAY } else { BLACK };
-        let tw = render::draw_text(img, &fonts.mono, 22.0, inner_x0, ty + 19.0, time_str, time_color);
+        let tw = render::draw_text(img, &fonts.mono, 26.0, inner_x0, ty + 22.0, time_str, time_color);
         if cancelled {
-            draw_line_segment_mut(img, (inner_x0, ty + 8.0), (inner_x0 + tw, ty + 8.0), Luma([DARK_GRAY]));
+            draw_line_segment_mut(img, (inner_x0, ty + 9.0), (inner_x0 + tw, ty + 9.0), Luma([DARK_GRAY]));
         }
 
         let meta_x = inner_x0 + time_col_w;
         let meta_w = inner_x0 + inner_w - meta_x;
-        let dest = truncate_to_width(&fonts.arial_bold, 16.0, dest, meta_w);
-        render::draw_text(img, &fonts.arial_bold, 16.0, meta_x, ry + 2.0 + 15.0, &dest, BLACK);
+        render::draw_text(img, &fonts.arial_bold, 19.0, meta_x, ry + 3.0 + 17.0, dest, BLACK);
 
-        let sub_y = ry + 23.0;
+        let sub_y = ry + 27.0;
         let (mark_kind, status_text, status_color): (Mark, String, u8) = if cancelled {
             (Mark::Cross, "CANCELLED".to_string(), DARK_GRAY)
         } else if live != sched {
@@ -224,16 +225,16 @@ fn draw_column(img: &mut GrayImage, fonts: &Fonts, spec: &ColumnSpec, data: &Dep
             (Mark::Dot, "ON TIME".to_string(), LIGHT_GRAY)
         };
 
-        let status_text_w = text_width(&fonts.mono, 12.0, &status_text);
-        let mark_w = 10.0;
-        let status_total_w = mark_w + 4.0 + status_text_w;
+        let status_text_w = text_width(&fonts.mono, 13.0, &status_text);
+        let mark_w = 12.0;
+        let status_total_w = mark_w + 5.0 + status_text_w;
         let via_text = format!("FROM {}", origin.to_uppercase());
-        let via_max_w = (meta_w - status_total_w - 8.0).max(0.0);
-        let via_text = truncate_to_width(&fonts.arial_bold, 11.0, &via_text, via_max_w);
-        render::draw_text(img, &fonts.arial_bold, 11.0, meta_x, sub_y + 11.0, &via_text, DARK_GRAY);
+        let via_max_w = meta_w - status_total_w - 10.0;
+        let via_text = truncate_to_width(&fonts.arial_bold, 13.0, &via_text, via_max_w);
+        render::draw_text(img, &fonts.arial_bold, 13.0, meta_x, sub_y + 13.0, &via_text, DARK_GRAY);
 
         let mark_x = meta_x + meta_w - status_total_w;
-        draw_status_mark(img, mark_x, sub_y + 21.0, mark_w, &mark_kind, status_color);
-        render::draw_text(img, &fonts.mono, 12.0, mark_x + mark_w + 4.0, sub_y + 11.0, &status_text, status_color);
+        draw_status_mark(img, mark_x, sub_y + 25.0, mark_w, &mark_kind, status_color);
+        render::draw_text(img, &fonts.mono, 13.0, mark_x + mark_w + 5.0, sub_y + 13.0, &status_text, status_color);
     }
 }
