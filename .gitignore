@@ -1,4 +1,5 @@
 /target
 egham_state*.txt
+calendar_token.txt
 poll.log
 *.png

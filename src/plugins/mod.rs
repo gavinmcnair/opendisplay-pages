@@ -1,5 +1,7 @@
 //! Concrete pages built on the plugin framework (`crate::plugin`).
 
+pub mod calendar_default;
+pub mod calendar_week;
 pub mod index;
 pub mod trains;
 pub mod weather;

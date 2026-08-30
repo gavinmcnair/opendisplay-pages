@@ -84,52 +84,43 @@ fn render_page(fonts: &Fonts, registry: &[(u8, &'static str)], updated_at: &str,
     draw_line_segment_mut(&mut img, (0.0, 101.0), (W as f32, 101.0), Luma([BLACK]));
     draw_line_segment_mut(&mut img, (0.0, 102.0), (W as f32, 102.0), Luma([BLACK]));
 
-    let row_h = 60.0;
-    let row_y0 = 140.0;
+    // Row height is deliberately compact (not the more generous spacing a
+    // 2-plugin registry could afford) -- needs to keep working as more pages
+    // get registered without colliding with the status bar below it.
+    let row_h = 42.0;
+    let row_y0 = 130.0;
     for (i, (slot_id, name)) in registry.iter().enumerate() {
         let ry = row_y0 + i as f32 * row_h;
         if i > 0 {
             draw_line_segment_mut(&mut img, (26.0, ry), (W as f32 - 26.0, ry), Luma([LIGHT_GRAY]));
         }
         let label = format!("SLOT {slot_id}");
-        render::draw_text(&mut img, &fonts.mono, 22.0, 26.0, ry + 32.0, &label, DARK_GRAY);
-        render::draw_text(&mut img, &fonts.arial_bold, 24.0, 190.0, ry + 33.0, name, BLACK);
-    }
+        render::draw_text(&mut img, &fonts.mono, 15.0, 26.0, ry + 27.0, &label, DARK_GRAY);
+        render::draw_text(&mut img, &fonts.arial_bold, 19.0, 150.0, ry + 28.0, name, BLACK);
 
-    let schedule_y0 = row_y0 + registry.len() as f32 * row_h + 30.0;
-    draw_schedule(&mut img, fonts, scheduler, schedule_y0);
+        // Schedule info folded into the same row, gray, right-aligned --
+        // rather than a separate section repeating each plugin's name a
+        // second time. Blank for a plugin the scheduler never mentions.
+        if let Some(schedule_text) = schedule_text_for(scheduler, *slot_id) {
+            let tw = render::text_width(&fonts.arial_bold, 14.0, &schedule_text);
+            render::draw_text(&mut img, &fonts.arial_bold, 14.0, W as f32 - 26.0 - tw, ry + 28.0, &schedule_text, LIGHT_GRAY);
+        }
+    }
 
     plugin::draw_status_bar(&mut img, fonts, SLOT, updated_at, STATUS_LABEL);
     img
 }
 
-/// Lists the server-side schedule (see `crate::scheduler`) so the index
-/// doubles as "what's driving the display right now, and why" -- each rule's
-/// time window and days, the default, and which one is active this instant
-/// (bold black; the rest dark gray).
-fn draw_schedule(img: &mut GrayImage, fonts: &Fonts, scheduler: &Scheduler, y0: f32) {
-    render::draw_text(img, &fonts.arial_bold, 15.0, 26.0, y0, "SCHEDULE", DARK_GRAY);
-    draw_line_segment_mut(img, (26.0, y0 + 10.0), (W as f32 - 26.0, y0 + 10.0), Luma([LIGHT_GRAY]));
-
-    let (active_slot, _) = scheduler.active_now();
-    let row_h = 32.0;
-    let mut ry = y0 + 34.0;
-
-    for rule in &scheduler.rules {
-        let active = rule.slot == active_slot;
-        let color = if active { BLACK } else { DARK_GRAY };
-        let when = format!("{}-{} {}", rule.start, rule.end, describe_days(rule.days));
-        render::draw_text(img, &fonts.mono, 15.0, 26.0, ry, &when, color);
-        let what = format!("SLOT {} {}", rule.slot, rule.label);
-        let ww = render::text_width(&fonts.arial_bold, 15.0, &what);
-        render::draw_text(img, &fonts.arial_bold, 15.0, W as f32 - 26.0 - ww, ry, &what, color);
-        ry += row_h;
+/// What to show, in gray, alongside a registry row for `slot_id` -- its
+/// scheduled window if `crate::scheduler` has a rule for it, "DEFAULT" if
+/// it's the fallback slot, or nothing for a plugin the schedule never
+/// mentions (e.g. the calendar pages, which are only ever reached manually).
+fn schedule_text_for(scheduler: &Scheduler, slot_id: u8) -> Option<String> {
+    if let Some(rule) = scheduler.rules.iter().find(|r| r.slot == slot_id) {
+        return Some(format!("{}-{} {}", rule.start, rule.end, describe_days(rule.days)));
     }
-
-    let default_active = scheduler.rules.iter().all(|r| r.slot != active_slot);
-    let color = if default_active { BLACK } else { DARK_GRAY };
-    render::draw_text(img, &fonts.mono, 15.0, 26.0, ry, "DEFAULT", color);
-    let what = format!("SLOT {} {}", scheduler.default_slot, scheduler.default_label);
-    let ww = render::text_width(&fonts.arial_bold, 15.0, &what);
-    render::draw_text(img, &fonts.arial_bold, 15.0, W as f32 - 26.0 - ww, ry, &what, color);
+    if slot_id == scheduler.default_slot {
+        return Some("DEFAULT".to_string());
+    }
+    None
 }

@@ -1,4 +1,5 @@
 mod ble;
+mod calendar;
 mod patterns;
 mod plugin;
 mod plugins;
@@ -12,6 +13,8 @@ mod weather;
 use anyhow::Result;
 use image::GrayImage;
 use plugin::Plugin;
+use plugins::calendar_default::CalendarDefaultPlugin;
+use plugins::calendar_week::CalendarWeekPlugin;
 use plugins::index::IndexPlugin;
 use plugins::trains::TrainsPlugin;
 use plugins::weather::WeatherPlugin;
@@ -58,13 +61,36 @@ async fn main() -> Result<()> {
     }
     if let Some(path) = args.iter().position(|a| a == "--render-index").and_then(|i| args.get(i + 1)) {
         let mut index = IndexPlugin::new(
-            vec![(TrainsPlugin.slot(), TrainsPlugin.name()), (WeatherPlugin.slot(), WeatherPlugin.name())],
+            vec![
+                (TrainsPlugin.slot(), TrainsPlugin.name()),
+                (WeatherPlugin.slot(), WeatherPlugin.name()),
+                (CalendarDefaultPlugin.slot(), CalendarDefaultPlugin.name()),
+                (CalendarWeekPlugin.slot(), CalendarWeekPlugin.name()),
+            ],
             scheduler::default_schedule(),
         );
         index.set_updated_at(&render::current_time_utc_hhmm());
         let (_, img) = index.render(&fonts).await?;
         img.save(path)?;
         eprintln!("Saved {path} ({}x{})", img.width(), img.height());
+        return Ok(());
+    }
+    if let Some(path) = args.iter().position(|a| a == "--render-calendar").and_then(|i| args.get(i + 1)) {
+        let mut cal = CalendarDefaultPlugin;
+        let (_, img) = cal.render(&fonts).await?;
+        img.save(path)?;
+        eprintln!("Saved {path} ({}x{})", img.width(), img.height());
+        return Ok(());
+    }
+    if let Some(path) = args.iter().position(|a| a == "--render-calendar-week").and_then(|i| args.get(i + 1)) {
+        let mut cal = CalendarWeekPlugin;
+        let (_, img) = cal.render(&fonts).await?;
+        img.save(path)?;
+        eprintln!("Saved {path} ({}x{})", img.width(), img.height());
+        return Ok(());
+    }
+    if args.iter().any(|a| a == "--calendar-auth") {
+        calendar::run_oauth_flow()?;
         return Ok(());
     }
 
@@ -98,7 +124,8 @@ async fn main() -> Result<()> {
     // (slot, name) -- one source of truth, so it can never drift out of
     // sync with what's actually running. Adding a future plugin is just one
     // more line in this Vec.
-    let mut plugins: Vec<Box<dyn Plugin>> = vec![Box::new(TrainsPlugin), Box::new(WeatherPlugin)];
+    let mut plugins: Vec<Box<dyn Plugin>> =
+        vec![Box::new(TrainsPlugin), Box::new(WeatherPlugin), Box::new(CalendarDefaultPlugin), Box::new(CalendarWeekPlugin)];
     let registry: Vec<(u8, &'static str)> = plugins.iter().map(|p| (p.slot(), p.name())).collect();
     let scheduler = scheduler::default_schedule();
     let mut index = IndexPlugin::new(registry, scheduler.clone());
