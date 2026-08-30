@@ -56,6 +56,27 @@ fn is_eastbound(svc: &Departure) -> bool {
     svc.destination.first().map(|d| d.location.description.contains("Waterloo")).unwrap_or(false)
 }
 
+/// Every distinct destination actually present in `services`, in first-seen
+/// order, joined for display -- e.g. "READING / WOKING" today, "ASCOT" some
+/// other time, whatever the real fetch contains. Never a fixed list: a
+/// westbound service's terminus varies by working, not something safe to
+/// enumerate once in source (see this function's call site).
+fn distinct_destinations(services: &[&Departure]) -> String {
+    let mut seen: Vec<&str> = Vec::new();
+    for svc in services {
+        if let Some(dest) = svc.destination.first().map(|d| d.location.description.as_str()) {
+            if !seen.contains(&dest) {
+                seen.push(dest);
+            }
+        }
+    }
+    if seen.is_empty() {
+        String::new()
+    } else {
+        seen.join(" / ").to_uppercase()
+    }
+}
+
 fn render_page(fonts: &Fonts, all: &DeparturesResponse) -> GrayImage {
     let mut img = GrayImage::from_pixel(W, H, Luma([WHITE]));
 
@@ -80,16 +101,25 @@ fn render_page(fonts: &Fonts, all: &DeparturesResponse) -> GrayImage {
     let east: Vec<&Departure> = all.services.iter().filter(|s| is_eastbound(s)).collect();
     let west: Vec<&Departure> = all.services.iter().filter(|s| !is_eastbound(s)).collect();
 
+    // Subtitle is read off whatever's actually in this fetch, not a
+    // hardcoded guess -- which specific station a westbound service
+    // terminates at varies train to train (Reading one working, Ascot or
+    // Woking via Chertsey the next) and isn't fixed enough to enumerate in
+    // source. This is exactly the assumption that made the Woking/Chertsey
+    // service invisible in an earlier version of this page.
+    let east_subtitle = distinct_destinations(&east);
+    let west_subtitle = distinct_destinations(&west);
+
     draw_column(
         &mut img,
         fonts,
-        &ColumnSpec { x0: 0.0, label: "PLATFORM 1 (EAST)", subtitle: "WATERLOO", arrow_left: true },
+        &ColumnSpec { x0: 0.0, label: "PLATFORM 1 (EAST)", subtitle: &east_subtitle, arrow_left: true },
         &east,
     );
     draw_column(
         &mut img,
         fonts,
-        &ColumnSpec { x0: 400.0, label: "PLATFORM 2 (WEST)", subtitle: "READING / ASCOT / CHERTSEY", arrow_left: false },
+        &ColumnSpec { x0: 400.0, label: "PLATFORM 2 (WEST)", subtitle: &west_subtitle, arrow_left: false },
         &west,
     );
 
