@@ -1,6 +1,7 @@
 mod air_quality;
 mod ble;
 mod calendar;
+mod chart;
 mod patterns;
 mod plugin;
 mod plugins;
@@ -15,6 +16,7 @@ use anyhow::Result;
 use image::GrayImage;
 use plugin::Plugin;
 use plugins::air_quality::AirQualityPlugin;
+use plugins::air_quality_history::AirQualityHistoryPlugin;
 use plugins::calendar_default::CalendarDefaultPlugin;
 use plugins::calendar_week::CalendarWeekPlugin;
 use plugins::index::IndexPlugin;
@@ -69,6 +71,7 @@ async fn main() -> Result<()> {
                 (CalendarDefaultPlugin.slot(), CalendarDefaultPlugin.name()),
                 (CalendarWeekPlugin.slot(), CalendarWeekPlugin.name()),
                 (AirQualityPlugin.slot(), AirQualityPlugin.name()),
+                (AirQualityHistoryPlugin.slot(), AirQualityHistoryPlugin.name()),
             ],
             scheduler::default_schedule(),
         );
@@ -94,6 +97,13 @@ async fn main() -> Result<()> {
     }
     if let Some(path) = args.iter().position(|a| a == "--render-air-quality").and_then(|i| args.get(i + 1)) {
         let mut aq = AirQualityPlugin;
+        let (_, img) = aq.render(&fonts).await?;
+        img.save(path)?;
+        eprintln!("Saved {path} ({}x{})", img.width(), img.height());
+        return Ok(());
+    }
+    if let Some(path) = args.iter().position(|a| a == "--render-pollen-history").and_then(|i| args.get(i + 1)) {
+        let mut aq = AirQualityHistoryPlugin;
         let (_, img) = aq.render(&fonts).await?;
         img.save(path)?;
         eprintln!("Saved {path} ({}x{})", img.width(), img.height());
@@ -141,6 +151,7 @@ async fn main() -> Result<()> {
             Box::new(CalendarDefaultPlugin),
             Box::new(CalendarWeekPlugin),
             Box::new(AirQualityPlugin),
+            Box::new(AirQualityHistoryPlugin),
         ];
     let registry: Vec<(u8, &'static str)> = plugins.iter().map(|p| (p.slot(), p.name())).collect();
     let scheduler = scheduler::default_schedule();
