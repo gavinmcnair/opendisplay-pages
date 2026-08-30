@@ -37,6 +37,8 @@ Three layers, each only aware of the one below it:
 | `plugins::index` | 0 | built from every other plugin's `(slot, name)` | `PRESS KEY1 / KEY2 TO BROWSE` |
 | `plugins::trains` | 1 | [Realtime Trains](https://api.rtt.io/) | `REALTIME TRAINS` |
 | `plugins::weather` | 2 | [Open-Meteo](https://open-meteo.com/) | `ALL-DAY RAIN FORECAST` |
+| `plugins::calendar_default` | 3 | Google Calendar (today + tomorrow, agenda) | `GOOGLE CALENDAR` |
+| `plugins::calendar_week` | 4 | Google Calendar (7-day grid) | `7-DAY CALENDAR` |
 
 The index is itself a `Plugin`, not a special case — it's built from
 `plugins.iter().map(|p| (p.slot(), p.name()))` in `main.rs`, so it can never
@@ -55,10 +57,10 @@ schedule's answer to what it last forced and, on a mismatch, sends
 the server-driven equivalent of a physical button press, added to the
 Firmware fork specifically because nothing else can change which slot is on
 screen remotely (a slot-target push alone only auto-refreshes when it
-happens to target the slot already selected). The index page renders the
-schedule itself — each rule's time window, days, and target slot, with
-whichever one is currently active shown in bold — so slot 0 doubles as "what's
-driving the display right now, and why".
+happens to target the slot already selected). Each registry row on the index
+page shows its own schedule window (or `DEFAULT`) in gray alongside its name,
+so slot 0 doubles as "what's driving the display right now, and why" without
+repeating each plugin's name in a separate section.
 
 A `Plugin` can also override `autoswitch_on_change()` to force itself onto
 the screen the instant its own content changes, bypassing the schedule for
@@ -77,16 +79,50 @@ Escape hatches for previewing a render without touching the device or the
 on-disk change-detection state:
 
 ```bash
-egham_ble --render-only  out.png      # trains page
-egham_ble --render-weather out.png    # weather page
-egham_ble --render-index out.png      # index page
-egham_ble --compress-test             # zlib ratio on synthetic + a real render
+egham_ble --render-only  out.png          # trains page
+egham_ble --render-weather out.png        # weather page
+egham_ble --render-index out.png          # index page
+egham_ble --render-calendar out.png       # calendar (default/agenda) page
+egham_ble --render-calendar-week out.png  # calendar (week grid) page
+egham_ble --compress-test                 # zlib ratio on synthetic + a real render
 ```
 
 Per-slot change detection lives in `egham_state_slot<N>.txt` next to the
 binary (gitignored) — a page is only re-pushed to the device when its content
 fingerprint actually changes, so e.g. the trains page's 5-minute poll doesn't
 re-transfer an unchanged board.
+
+## Google Calendar setup
+
+Unlike RTT/Open-Meteo, Google Calendar needs real user consent, not just an
+API key — a one-time setup, done once per machine this client runs on:
+
+1. In [Google Cloud Console](https://console.cloud.google.com/), create (or
+   pick) a project, then enable the **Google Calendar API** for it
+   (APIs & Services → Library).
+2. Configure the OAuth consent screen (APIs & Services → OAuth consent
+   screen) — External, testing mode is fine for personal use. Add your own
+   Google account as a test user.
+3. Create an OAuth client (APIs & Services → Credentials → Create
+   Credentials → OAuth client ID), type **Desktop app**. Copy the Client ID
+   and Client Secret it gives you.
+4. Export them and run the one-time consent flow:
+
+   ```bash
+   export GOOGLE_CALENDAR_CLIENT_ID=...
+   export GOOGLE_CALENDAR_CLIENT_SECRET=...
+   egham_ble --calendar-auth
+   ```
+
+   This prints a URL — open it, sign in, grant access. The flow catches
+   Google's redirect on a loopback listener and saves a refresh token to
+   `calendar_token.txt` (gitignored, never commit it). `GOOGLE_CALENDAR_CLIENT_ID`/`_SECRET` need
+   to stay set (e.g. in your shell profile) for every future run, same as
+   any other env var this project reads.
+
+`calendar_token.txt` is the only long-lived secret — treat it like a
+password to your calendar. Re-run `--calendar-auth` if it's ever lost or
+revoked.
 
 ## Adding a page
 
