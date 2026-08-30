@@ -43,6 +43,28 @@ The index is itself a `Plugin`, not a special case — it's built from
 drift out of sync with what's actually registered. Slot 0 is reserved for it;
 adding a page is one more line in `main.rs`'s plugin `Vec`.
 
+## Scheduler
+
+`scheduler.rs` decides which slot *should* be on screen right now, purely
+from wall-clock time (`chrono::Local`, so DST comes from the OS for free).
+The default schedule: trains 07:00–08:30 Mon–Fri, weather otherwise. Every 60
+seconds (independent of the 5-minute content poll) `main.rs` compares the
+schedule's answer to what it last forced and, on a mismatch, sends
+`ble::switch_to_slot` — [`CMD_SLOT_SWITCH`
+(0x0084)](https://github.com/gavinmcnair/Firmware/blob/feat/pipe-slot-write/include/opendisplay_protocol.h),
+the server-driven equivalent of a physical button press, added to the
+Firmware fork specifically because nothing else can change which slot is on
+screen remotely (a slot-target push alone only auto-refreshes when it
+happens to target the slot already selected). The index page renders the
+schedule itself — each rule's time window, days, and target slot, with
+whichever one is currently active shown in bold — so slot 0 doubles as "what's
+driving the display right now, and why".
+
+A `Plugin` can also override `autoswitch_on_change()` to force itself onto
+the screen the instant its own content changes, bypassing the schedule for
+that tick — meant for a future alert-style page (nothing currently uses it,
+but the wiring is in place in `main.rs`'s loop).
+
 ## Running
 
 ```bash
