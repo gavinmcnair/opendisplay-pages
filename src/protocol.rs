@@ -12,6 +12,10 @@ pub const SERVICE_CHAR_UUID: &str = "00002446-0000-1000-8000-00805f9b34fb";
 pub const OP_PIPE_START: [u8; 2] = [0x00, 0x80];
 pub const OP_PIPE_DATA: [u8; 2] = [0x00, 0x81];
 pub const OP_PIPE_END: [u8; 2] = [0x00, 0x82];
+/// CMD_SLOT_SWITCH (0x0084) -- LOCAL FORK DIVERGENCE, not upstream. The BLE
+/// front door onto the same on-device switch a button press triggers; see
+/// OpenDisplay/Firmware's opendisplay_protocol.h CHANGELOG.
+pub const OP_SLOT_SWITCH: [u8; 2] = [0x00, 0x84];
 
 pub const PIPE_VERSION: u8 = 0x01;
 pub const PIPE_FLAG_COMPRESSED: u8 = 0x01;
@@ -156,4 +160,27 @@ pub fn build_end(refresh_mode: u8) -> Vec<u8> {
     buf.push(refresh_mode);
     buf.extend_from_slice(&0u32.to_be_bytes()); // new_etag = 0 (not using partial/etag)
     buf
+}
+
+/// Build the CMD_SLOT_SWITCH (0x0084) request: `[0x00][0x84][slot_id:1]`.
+pub fn build_slot_switch(slot_id: u8) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(3);
+    buf.extend_from_slice(&OP_SLOT_SWITCH);
+    buf.push(slot_id);
+    buf
+}
+
+pub enum SlotSwitchResponse {
+    Ack,
+    Nack { err: u8 },
+}
+
+pub fn parse_slot_switch_response(data: &[u8]) -> Option<SlotSwitchResponse> {
+    if data.len() >= 3 && data[0] == 0xFF && data[1] == 0x84 {
+        return Some(SlotSwitchResponse::Nack { err: data[2] });
+    }
+    if data.len() >= 2 && data[0] == 0x00 && data[1] == 0x84 {
+        return Some(SlotSwitchResponse::Ack);
+    }
+    None
 }

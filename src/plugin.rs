@@ -32,6 +32,18 @@ pub trait Plugin {
     /// checker accept "however long the shorter of the two actually is" at
     /// each call site instead of demanding one bound the other.
     fn render<'a>(&'a mut self, fonts: &'a Fonts) -> LocalBoxFuture<'a, Result<(u64, GrayImage)>>;
+
+    /// If true, the orchestrator force-switches the panel to this plugin's
+    /// slot (via `ble::switch_to_slot`, CMD_SLOT_SWITCH) every time its
+    /// content actually changes -- an event-driven override on top of the
+    /// scheduler's time-based rules, for a page that needs to interrupt
+    /// whatever's currently showing (e.g. an alert). Not needed by any
+    /// current plugin (trains/weather/index all leave this false, letting
+    /// `scheduler::Scheduler` decide), but the mechanism exists precisely so
+    /// a future one can flip it on without any other wiring.
+    fn autoswitch_on_change(&self) -> bool {
+        false
+    }
 }
 
 /// Draws the shared bottom status bar every page uses, then performs the

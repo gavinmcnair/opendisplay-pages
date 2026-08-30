@@ -8,10 +8,24 @@ use std::io::Write as _;
 use std::time::Duration;
 use uuid::Uuid;
 
-use crate::protocol::{self, DataResponse, PipeParams, StartResponse};
+use crate::protocol::{self, DataResponse, PipeParams, SlotSwitchResponse, StartResponse};
 
 const NOTIFY_TIMEOUT: Duration = Duration::from_secs(30);
 const SCAN_TIMEOUT: Duration = Duration::from_secs(20);
+// btleplug's connect()/discover_services() have no timeout of their own --
+// observed hanging indefinitely (multi-minute, never returning) after the
+// underlying BLE stack was left in a bad state by an interrupted prior
+// attempt. Wrapped explicitly so a stuck connect fails loudly instead of
+// hanging the whole process.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+// Same reasoning as CONNECT_TIMEOUT, but wrapping the WHOLE upload/switch
+// operation rather than each individual await: notifications()/subscribe()/
+// write() inside run_pipe_write and switch_to_slot are equally unguarded by
+// btleplug, and chasing every call site with its own timeout is exactly the
+// kind of complexity this project avoids when one outer bound covers all of
+// them at once. 60s is generous even for the largest slot payload's full
+// negotiate+stream+end sequence under normal conditions.
+const OP_TIMEOUT: Duration = Duration::from_secs(60);
 
 pub async fn find_and_connect(device_name: &str) -> Result<Peripheral> {
     let manager = Manager::new().await.context("creating BLE manager")?;
@@ -32,8 +46,14 @@ pub async fn find_and_connect(device_name: &str) -> Result<Peripheral> {
         tokio::time::sleep(Duration::from_millis(300)).await;
     };
 
-    peripheral.connect().await.context("BLE connect")?;
-    peripheral.discover_services().await.context("discovering GATT services")?;
+    tokio::time::timeout(CONNECT_TIMEOUT, peripheral.connect())
+        .await
+        .map_err(|_| anyhow!("BLE connect timed out after {CONNECT_TIMEOUT:?}"))?
+        .context("BLE connect")?;
+    tokio::time::timeout(CONNECT_TIMEOUT, peripheral.discover_services())
+        .await
+        .map_err(|_| anyhow!("GATT service discovery timed out after {CONNECT_TIMEOUT:?}"))?
+        .context("discovering GATT services")?;
     Ok(peripheral)
 }
 
@@ -80,7 +100,39 @@ pub async fn upload_pipe_write_to_slot(peripheral: &Peripheral, slot_id: u8, pay
     eprintln!("Slot {slot_id}: compressed {} bytes -> {} bytes", payload.len(), compressed.len());
     let start_req =
         protocol::build_start_slot(slot_id, payload.len() as u32, 16, 8, 244, compressed.len() as u32);
-    run_pipe_write(peripheral, &compressed, &start_req, false).await
+    tokio::time::timeout(OP_TIMEOUT, run_pipe_write(peripheral, &compressed, &start_req, false))
+        .await
+        .map_err(|_| anyhow!("slot {slot_id} upload timed out after {OP_TIMEOUT:?}"))?
+}
+
+/// Sends CMD_SLOT_SWITCH (0x0084, LOCAL FORK DIVERGENCE) -- the server-driven
+/// equivalent of a physical button press: tells the device to display
+/// `slot_id` right now, no content transfer involved. Errs on NACK or an
+/// unexpected/missing response (including old firmware without this opcode,
+/// which won't reply at all -- the caller should treat any error here as
+/// "couldn't force the switch this tick, try again next tick" rather than fatal).
+pub async fn switch_to_slot(peripheral: &Peripheral, slot_id: u8) -> Result<()> {
+    tokio::time::timeout(OP_TIMEOUT, switch_to_slot_inner(peripheral, slot_id))
+        .await
+        .map_err(|_| anyhow!("slot switch to {slot_id} timed out after {OP_TIMEOUT:?}"))?
+}
+
+async fn switch_to_slot_inner(peripheral: &Peripheral, slot_id: u8) -> Result<()> {
+    let char_uuid = Uuid::parse_str(protocol::SERVICE_CHAR_UUID)?;
+    let ch = find_char(peripheral, char_uuid)?;
+    let mut notifications = peripheral.notifications().await.context("getting notification stream")?;
+    peripheral.subscribe(&ch).await.context("subscribing to notifications")?;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    let req = protocol::build_slot_switch(slot_id);
+    peripheral.write(&ch, &req, WriteType::WithResponse).await.context("writing SLOT_SWITCH")?;
+
+    let resp = wait_for(&mut notifications, |d| protocol::parse_slot_switch_response(d)).await;
+    let _ = peripheral.disconnect().await; // same as run_pipe_write: free the connection promptly so the next scan finds the device again
+    match resp? {
+        SlotSwitchResponse::Ack => Ok(()),
+        SlotSwitchResponse::Nack { err } => bail!("SLOT_SWITCH NACKed, err=0x{err:02x}"),
+    }
 }
 
 /// Shared negotiate/send/end sequence for both destinations above. The only
