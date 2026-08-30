@@ -36,6 +36,15 @@ impl Plugin for CalendarDefaultPlugin {
             Ok((fingerprint, img))
         })
     }
+
+    /// The one-time Google OAuth consent flow -- see `calendar::run_oauth_flow`.
+    /// Both calendar plugins share the same saved refresh token
+    /// (`calendar_token.txt`), so either one running setup is equivalent;
+    /// this exists on both simply so `--setup` finds it under whichever
+    /// plugin the caller thinks of as "the" calendar one.
+    fn setup(&mut self) -> Result<()> {
+        calendar::run_oauth_flow()
+    }
 }
 
 fn render_page(fonts: &Fonts, events: &[Event]) -> GrayImage {

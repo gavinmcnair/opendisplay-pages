@@ -39,6 +39,12 @@ impl Plugin for CalendarWeekPlugin {
             Ok((fingerprint, img))
         })
     }
+
+    /// See `CalendarDefaultPlugin::setup` -- same shared token, present on
+    /// both plugins so `--setup` finds it under either.
+    fn setup(&mut self) -> Result<()> {
+        calendar::run_oauth_flow()
+    }
 }
 
 fn render_page(fonts: &Fonts, events: &[Event]) -> GrayImage {

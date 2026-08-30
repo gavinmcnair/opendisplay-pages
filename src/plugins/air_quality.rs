@@ -1,14 +1,13 @@
 //! Air quality & pollen page (slot 5): the second half of the weather pair
 //! (see `plugins::weather`) -- current air quality and UV as a one-line
-//! summary, then today's four pollen "allergy triggers" as an hourly line
-//! graph: grass, birch, alder (kept separate from birch, unlike weed --
-//! birch is the most potent UK tree allergen and the one with an oral
-//! allergy syndrome food-crossover reaction, worth telling apart from
+//! summary (which also names whichever pollen peaks highest today and its
+//! risk category, so that's answered before anyone has to go read the
+//! chart's legend), then today's four pollen "allergy triggers" as an
+//! hourly line graph: grass, birch, alder (kept separate from birch, unlike
+//! weed -- birch is the most potent UK tree allergen and the one with an
+//! oral allergy syndrome food-crossover reaction, worth telling apart from
 //! alder), and weed (worse of ragweed/mugwort per hour). See `chart.rs` for
 //! why each series gets its own line style and marker instead of a color.
-//! `plugins::air_quality_history` is the same idea over weeks instead of
-//! hours, for matching a symptom date against what was actually elevated
-//! that day.
 
 use anyhow::Result;
 use futures::future::LocalBoxFuture;
@@ -37,7 +36,7 @@ impl Plugin for AirQualityPlugin {
 
     fn render<'a>(&'a mut self, fonts: &'a Fonts) -> LocalBoxFuture<'a, Result<(u64, GrayImage)>> {
         Box::pin(async move {
-            let forecast = air_quality::fetch_forecast(0)?;
+            let forecast = air_quality::fetch_forecast()?;
             let fingerprint = air_quality::fingerprint(&forecast);
             let img = render_page(fonts, &forecast);
             Ok((fingerprint, img))

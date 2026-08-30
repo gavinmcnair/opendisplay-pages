@@ -39,6 +39,7 @@ Three layers, each only aware of the one below it:
 | `plugins::weather` | 2 | [Open-Meteo](https://open-meteo.com/) | `ALL-DAY RAIN FORECAST` |
 | `plugins::calendar_default` | 3 | Google Calendar (today + tomorrow, agenda) | `GOOGLE CALENDAR` |
 | `plugins::calendar_week` | 4 | Google Calendar (7-day grid) | `7-DAY CALENDAR` |
+| `plugins::air_quality` | 5 | Open-Meteo Air Quality (AQI/UV + pollen) | `AIR QUALITY & POLLEN` |
 
 The index is itself a `Plugin`, not a special case — it's built from
 `plugins.iter().map(|p| (p.slot(), p.name()))` in `main.rs`, so it can never
@@ -76,15 +77,17 @@ cargo build --release
 ```
 
 Escape hatches for previewing a render without touching the device or the
-on-disk change-detection state:
+on-disk change-detection state. Both are generic — the orchestrator (`main.rs`)
+looks the target up by slot number, exact name, or a case-insensitive
+substring of its name, entirely through the `Plugin` trait. There's no
+per-plugin flag to add here when a new page is registered:
 
 ```bash
-egham_ble --render-only  out.png          # trains page
-egham_ble --render-weather out.png        # weather page
-egham_ble --render-index out.png          # index page
-egham_ble --render-calendar out.png       # calendar (default/agenda) page
-egham_ble --render-calendar-week out.png  # calendar (week grid) page
-egham_ble --compress-test                 # zlib ratio on synthetic + a real render
+egham_ble --render 1 out.png          # by slot number
+egham_ble --render weather out.png    # by (substring of) name
+egham_ble --render index out.png      # slot 0 is always the index
+egham_ble --setup calendar            # one-time interactive setup (Plugin::setup, no-op for most plugins)
+egham_ble --compress-test             # zlib ratio on synthetic patterns + the first registered plugin's real render
 ```
 
 Per-slot change detection lives in `egham_state_slot<N>.txt` next to the
@@ -111,7 +114,7 @@ API key — a one-time setup, done once per machine this client runs on:
    ```bash
    export GOOGLE_CALENDAR_CLIENT_ID=...
    export GOOGLE_CALENDAR_CLIENT_SECRET=...
-   egham_ble --calendar-auth
+   egham_ble --setup calendar
    ```
 
    This prints a URL — open it, sign in, grant access. The flow catches
@@ -121,7 +124,7 @@ API key — a one-time setup, done once per machine this client runs on:
    any other env var this project reads.
 
 `calendar_token.txt` is the only long-lived secret — treat it like a
-password to your calendar. Re-run `--calendar-auth` if it's ever lost or
+password to your calendar. Re-run `--setup calendar` if it's ever lost or
 revoked.
 
 ## Adding a page
@@ -131,3 +134,16 @@ and add `Box::new(<Name>Plugin)` to the `Vec` in `main.rs`. Pick an unused
 slot number ≥ 1 (0 is the index). The status bar, quantization, and BLE push
 are handled by the framework — a new page only needs to render its own
 content and finish with `plugin::draw_status_bar(...)`.
+
+That `Vec` in `main.rs` is deliberately the *only* place a new plugin's
+concrete type gets named. Everything else — `--render`, `--setup`,
+`--compress-test`, the content-poll loop, the scheduler, the index — goes
+through the `Plugin` trait alone, so nothing else in `main.rs` needs
+touching. If the new page needs its own credentials or config, read them
+from its own env vars inside the plugin (see `calendar.rs`'s
+`GOOGLE_CALENDAR_CLIENT_ID`/`_SECRET`), not by plumbing anything through
+the orchestrator. If it needs one-time interactive setup before it can
+render, override `Plugin::setup()` (see `CalendarDefaultPlugin::setup`) —
+that's what `--setup <name>` calls. If it needs to look fresher than the
+default 5-minute poll without hammering its API, override
+`Plugin::poll_interval()` and cache internally (see `plugins::trains`).

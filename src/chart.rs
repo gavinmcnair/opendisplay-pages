@@ -3,8 +3,7 @@
 //! levels -- no color to distinguish series with, so each `Series` carries
 //! its own line style (solid/dashed/long-dash/dotted) and point marker
 //! (dot/cross/triangle/square) instead, plus a legend that spells out which
-//! is which. Used by `plugins::air_quality` and
-//! `plugins::air_quality_history`; nothing here is pollen-specific.
+//! is which. Used by `plugins::air_quality`; nothing here is pollen-specific.
 
 use image::{GrayImage, Luma};
 use imageproc::drawing::{draw_filled_ellipse_mut, draw_filled_rect_mut, draw_line_segment_mut, draw_polygon_mut};
@@ -21,7 +20,6 @@ pub enum LineStyle {
 }
 
 pub enum Marker {
-    None,
     Dot,
     Cross,
     Triangle,
@@ -36,16 +34,11 @@ pub struct Series<'a> {
 }
 
 /// Draws one series as a connected line across `points` (already mapped to
-/// pixel coordinates by the caller), plus a marker at every point unless
-/// `marker` is `None` -- callers with many points (a long history chart)
-/// typically pass `Marker::None` and rely on line style alone, since a
-/// marker at every one of ~90 points would be noise, not signal.
+/// pixel coordinates by the caller), plus a marker at every point.
 pub fn draw_series(img: &mut GrayImage, points: &[(f32, f32)], style: &LineStyle, marker: &Marker, color: u8) {
     draw_series_line(img, points, style, color);
-    if !matches!(marker, Marker::None) {
-        for &(x, y) in points {
-            draw_marker(img, x, y, marker, color);
-        }
+    for &(x, y) in points {
+        draw_marker(img, x, y, marker, color);
     }
 }
 
@@ -94,7 +87,6 @@ fn draw_patterned_segment(img: &mut GrayImage, a: (f32, f32), b: (f32, f32), col
 fn draw_marker(img: &mut GrayImage, x: f32, y: f32, marker: &Marker, color: u8) {
     let r = 4.0;
     match marker {
-        Marker::None => {}
         Marker::Dot => {
             draw_filled_ellipse_mut(img, (x as i32, y as i32), r as i32, r as i32, Luma([color]));
         }

@@ -67,6 +67,18 @@ pub trait Plugin {
     fn poll_interval(&self) -> Duration {
         DEFAULT_POLL_INTERVAL
     }
+
+    /// One-time interactive configuration a plugin needs before it can
+    /// `render()` at all (e.g. Google Calendar's OAuth consent flow) --
+    /// no-op by default. Exists so `main.rs` can offer one generic `--setup
+    /// <slot-or-name>` flag instead of a bespoke CLI flag per plugin that
+    /// happens to need this (the orchestrator has no business knowing which
+    /// plugins need setup or what that setup involves; that's entirely the
+    /// plugin's own concern, same as it owning its own env vars for
+    /// credentials rather than the orchestrator plumbing them through).
+    fn setup(&mut self) -> Result<()> {
+        Ok(())
+    }
 }
 
 /// Draws the shared bottom status bar every page uses, then performs the

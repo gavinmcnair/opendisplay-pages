@@ -12,11 +12,9 @@ mod scheduler;
 mod state;
 mod weather;
 
-use anyhow::Result;
-use image::GrayImage;
+use anyhow::{Context, Result};
 use plugin::Plugin;
 use plugins::air_quality::AirQualityPlugin;
-use plugins::air_quality_history::AirQualityHistoryPlugin;
 use plugins::calendar_default::CalendarDefaultPlugin;
 use plugins::calendar_week::CalendarWeekPlugin;
 use plugins::index::IndexPlugin;
@@ -41,91 +39,88 @@ fn state_path_for_slot(slot: u8) -> PathBuf {
     PathBuf::from(format!("egham_state_slot{slot}.txt"))
 }
 
+/// Matches a `--render`/`--setup` identifier against a plugin's slot number
+/// (as a string, e.g. "5"), its exact name, or a case-insensitive substring
+/// of its name (so "weather" finds "Egham Weather" without needing the
+/// full, space-containing, quoted name) -- the things a CLI caller could
+/// plausibly type about a plugin without reading source. First match wins
+/// on ambiguity (e.g. "egham" would match everything); exact slot number is
+/// the unambiguous option when that matters. This is the one lookup every
+/// plugin-targeting flag goes through, so main.rs never needs a bespoke
+/// flag or branch per plugin -- see plugin.rs's own doc comments on
+/// `setup`/`poll_interval` for why that matters: the orchestrator should
+/// stay plugin-agnostic, and anything a specific plugin needs (credentials,
+/// one-time setup, its own fetch cadence) is that plugin's own concern,
+/// read from its own env vars or implemented behind the trait's
+/// default-overridable methods.
+fn find_plugin<'a>(plugins: &'a mut [Box<dyn Plugin>], id: &str) -> Option<&'a mut Box<dyn Plugin>> {
+    let id_lower = id.to_lowercase();
+    plugins.iter_mut().find(|p| p.slot().to_string() == id || p.name().to_lowercase().contains(&id_lower))
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
     let fonts = render::Fonts::load();
 
-    // Escape hatches for previewing a render without touching the device or
-    // the change-detection state files.
-    if let Some(path) = args.iter().position(|a| a == "--render-only").and_then(|i| args.get(i + 1)) {
-        let mut trains = TrainsPlugin::new();
-        let (_, img) = trains.render(&fonts).await?;
+    // The one place concrete plugin types are named. Adding a page is one
+    // more line here (plus its own registration in plugins/mod.rs) --
+    // nothing below this needs to change, including every --render-able
+    // escape hatch, since all of them go through the Plugin trait generically.
+    let mut plugins: Vec<Box<dyn Plugin>> = vec![
+        Box::new(TrainsPlugin::new()),
+        Box::new(WeatherPlugin),
+        Box::new(CalendarDefaultPlugin),
+        Box::new(CalendarWeekPlugin),
+        Box::new(AirQualityPlugin),
+    ];
+    let registry: Vec<(u8, &'static str)> = plugins.iter().map(|p| (p.slot(), p.name())).collect();
+    let scheduler = scheduler::default_schedule();
+    let mut index = IndexPlugin::new(registry, scheduler.clone());
+
+    // Generic escape hatches -- one `--render` and one `--setup` flag cover
+    // every plugin (including the index, which is structurally special --
+    // slot 0, orchestrator-built registry -- but still just a Plugin as far
+    // as rendering it goes) via find_plugin's lookup, instead of a bespoke
+    // `--render-<name>` flag needing to be added here for every new plugin.
+    if let Some(idx) = args.iter().position(|a| a == "--render") {
+        let id = args.get(idx + 1).context("--render needs <slot-or-name> <output-path>")?;
+        let path = args.get(idx + 2).context("--render needs <slot-or-name> <output-path>")?;
+        let id_lower = id.to_lowercase();
+        let img = if id == "0" || "index".contains(&id_lower) || index.name().to_lowercase().contains(&id_lower) {
+            index.set_updated_at(&render::current_time_utc_hhmm());
+            index.render(&fonts).await?.1
+        } else if let Some(plugin) = find_plugin(&mut plugins, id) {
+            plugin.render(&fonts).await?.1
+        } else {
+            let known = std::iter::once(format!("0 ({})", index.name()))
+                .chain(plugins.iter().map(|p| format!("{} ({})", p.slot(), p.name())))
+                .collect::<Vec<_>>()
+                .join(", ");
+            anyhow::bail!("no plugin matches '{id}' -- registered: {known}");
+        };
         img.save(path)?;
         eprintln!("Saved {path} ({}x{})", img.width(), img.height());
         return Ok(());
     }
-    if let Some(path) = args.iter().position(|a| a == "--render-weather").and_then(|i| args.get(i + 1)) {
-        let mut weather = WeatherPlugin;
-        let (_, img) = weather.render(&fonts).await?;
-        img.save(path)?;
-        eprintln!("Saved {path} ({}x{})", img.width(), img.height());
-        return Ok(());
-    }
-    if let Some(path) = args.iter().position(|a| a == "--render-index").and_then(|i| args.get(i + 1)) {
-        let trains = TrainsPlugin::new();
-        let mut index = IndexPlugin::new(
-            vec![
-                (trains.slot(), trains.name()),
-                (WeatherPlugin.slot(), WeatherPlugin.name()),
-                (CalendarDefaultPlugin.slot(), CalendarDefaultPlugin.name()),
-                (CalendarWeekPlugin.slot(), CalendarWeekPlugin.name()),
-                (AirQualityPlugin.slot(), AirQualityPlugin.name()),
-                // AirQualityHistoryPlugin (slot 6) deliberately NOT registered
-                // here -- it barely changes day to day, which makes it feel
-                // static/useless as a permanent slot competing with pages that
-                // are actually worth checking "right now". Still generatable
-                // on demand via --render-pollen-history below.
-            ],
-            scheduler::default_schedule(),
-        );
-        index.set_updated_at(&render::current_time_utc_hhmm());
-        let (_, img) = index.render(&fonts).await?;
-        img.save(path)?;
-        eprintln!("Saved {path} ({}x{})", img.width(), img.height());
-        return Ok(());
-    }
-    if let Some(path) = args.iter().position(|a| a == "--render-calendar").and_then(|i| args.get(i + 1)) {
-        let mut cal = CalendarDefaultPlugin;
-        let (_, img) = cal.render(&fonts).await?;
-        img.save(path)?;
-        eprintln!("Saved {path} ({}x{})", img.width(), img.height());
-        return Ok(());
-    }
-    if let Some(path) = args.iter().position(|a| a == "--render-calendar-week").and_then(|i| args.get(i + 1)) {
-        let mut cal = CalendarWeekPlugin;
-        let (_, img) = cal.render(&fonts).await?;
-        img.save(path)?;
-        eprintln!("Saved {path} ({}x{})", img.width(), img.height());
-        return Ok(());
-    }
-    if let Some(path) = args.iter().position(|a| a == "--render-air-quality").and_then(|i| args.get(i + 1)) {
-        let mut aq = AirQualityPlugin;
-        let (_, img) = aq.render(&fonts).await?;
-        img.save(path)?;
-        eprintln!("Saved {path} ({}x{})", img.width(), img.height());
-        return Ok(());
-    }
-    if let Some(path) = args.iter().position(|a| a == "--render-pollen-history").and_then(|i| args.get(i + 1)) {
-        let mut aq = AirQualityHistoryPlugin;
-        let (_, img) = aq.render(&fonts).await?;
-        img.save(path)?;
-        eprintln!("Saved {path} ({}x{})", img.width(), img.height());
-        return Ok(());
-    }
-    if args.iter().any(|a| a == "--calendar-auth") {
-        calendar::run_oauth_flow()?;
+    if let Some(id) = args.iter().position(|a| a == "--setup").and_then(|i| args.get(i + 1)) {
+        let plugin = find_plugin(&mut plugins, id).with_context(|| format!("no plugin matches '{id}'"))?;
+        plugin.setup()?;
+        eprintln!("Setup complete for {}.", plugin.name());
         return Ok(());
     }
 
     if args.iter().any(|a| a == "--compress-test") {
-        let mut trains = TrainsPlugin::new();
-        let (_, actual_board) = trains.render(&fonts).await?;
-        let cases: [(&str, GrayImage); 4] = [
+        // First registered plugin, whichever that is -- not naming a
+        // specific one keeps this generic too (see find_plugin's doc
+        // comment on why main.rs stays plugin-agnostic).
+        let board_label = format!("actual board ({})", plugins[0].name());
+        let (_, actual_board) = plugins[0].render(&fonts).await?;
+        let cases: [(&str, image::GrayImage); 4] = [
             ("checkerboard (1px)", patterns::checkerboard()),
             ("fractal (mandelbrot, 4-level)", patterns::fractal()),
             ("noise (uniform random)", patterns::noise(424_242)),
-            ("actual board (right now)", actual_board),
+            (&board_label, actual_board),
         ];
         println!("{:<32} {:>10} {:>10} {:>8}", "pattern", "raw", "compressed", "ratio");
         for (name, img) in &cases {
@@ -144,23 +139,6 @@ async fn main() -> Result<()> {
 
     let once = args.iter().any(|a| a == "--once");
 
-    // The index's registry is built from every OTHER registered plugin's
-    // (slot, name) -- one source of truth, so it can never drift out of
-    // sync with what's actually running. Adding a future plugin is just one
-    // more line in this Vec.
-    let mut plugins: Vec<Box<dyn Plugin>> =
-        vec![
-            Box::new(TrainsPlugin::new()),
-            Box::new(WeatherPlugin),
-            Box::new(CalendarDefaultPlugin),
-            Box::new(CalendarWeekPlugin),
-            Box::new(AirQualityPlugin),
-            // AirQualityHistoryPlugin (slot 6) not included -- see the
-            // matching comment at the --render-index registry above.
-        ];
-    let registry: Vec<(u8, &'static str)> = plugins.iter().map(|p| (p.slot(), p.name())).collect();
-    let scheduler = scheduler::default_schedule();
-    let mut index = IndexPlugin::new(registry, scheduler.clone());
     let mut last_fingerprints: Vec<Option<u64>> =
         plugins.iter().map(|p| state::load(&state_path_for_slot(p.slot()))).collect();
 
