@@ -20,14 +20,27 @@ pub struct Hourly {
     pub surface_pressure: Vec<f32>,
 }
 
+/// Open-Meteo's `current` block, unlike `hourly`, is a real "now" reading --
+/// no guessing which hourly index corresponds to the current time (which
+/// would need real timezone/DST handling this project otherwise avoids, see
+/// `plugins::weather`'s header comment). `weather_code` is a WMO code, mapped
+/// to an icon by `plugins::weather::classify_weather_code`.
+#[derive(Deserialize, Debug, Clone)]
+pub struct Current {
+    pub temperature_2m: f32,
+    pub weather_code: u8,
+}
+
 #[derive(Deserialize, Debug, Clone)]
 pub struct Forecast {
+    pub current: Current,
     pub hourly: Hourly,
 }
 
 pub fn fetch_forecast() -> Result<Forecast> {
     let url = format!(
         "https://api.open-meteo.com/v1/forecast?latitude={LATITUDE}&longitude={LONGITUDE}\
+         &current=temperature_2m,weather_code\
          &hourly=temperature_2m,precipitation_probability,relative_humidity_2m,surface_pressure\
          &timezone=Europe%2FLondon&forecast_days=1"
     );
@@ -39,12 +52,15 @@ pub fn fetch_forecast() -> Result<Forecast> {
     Ok(resp)
 }
 
-/// Fingerprints the meaningful hourly values (temperature, rain probability,
-/// humidity, pressure) -- excludes nothing here deliberately, since unlike
-/// RTT's `query.time_from` this response has no "generated at" field that
-/// would otherwise make every poll look like a change.
+/// Fingerprints the meaningful values (current conditions + hourly
+/// temperature, rain probability, humidity, pressure) -- excludes nothing
+/// here deliberately, since unlike RTT's `query.time_from` this response has
+/// no "generated at" field that would otherwise make every poll look like a
+/// change.
 pub fn fingerprint(forecast: &Forecast) -> u64 {
     let mut hasher = DefaultHasher::new();
+    forecast.current.temperature_2m.to_bits().hash(&mut hasher);
+    forecast.current.weather_code.hash(&mut hasher);
     for t in &forecast.hourly.temperature_2m {
         t.to_bits().hash(&mut hasher);
     }
