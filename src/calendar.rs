@@ -184,28 +184,106 @@ struct EventsResponse {
     items: Vec<Event>,
 }
 
-/// Fetches events on the primary calendar from now through `days_ahead`
-/// days out, in Europe/London wall-clock time (the API converts for us, same
-/// trick as Open-Meteo's `timezone` param -- see `weather.rs`'s module doc
-/// for why that's preferable to a bundled timezone database here).
-pub fn fetch_events(days_ahead: i64) -> Result<Vec<Event>> {
-    let access_token = mint_access_token()?;
-    let time_min = Local::now().to_rfc3339();
-    let time_max = (Local::now() + Duration::days(days_ahead)).to_rfc3339();
+#[derive(Deserialize, Debug, Clone)]
+struct CalendarListEntry {
+    id: String,
+    // Absent entirely on some entries (observed on the primary calendar's
+    // own listing) -- Google's docs say true is the default when omitted.
+    #[serde(default = "default_true")]
+    selected: bool,
+}
 
-    let resp: EventsResponse = ureq::get("https://www.googleapis.com/calendar/v3/calendars/primary/events")
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Deserialize, Debug, Clone, Default)]
+struct CalendarListResponse {
+    #[serde(default)]
+    items: Vec<CalendarListEntry>,
+}
+
+/// Every calendar visible in this account's Google Calendar UI (the
+/// `selected` flag on calendarList is exactly "has its checkbox ticked" --
+/// so this naturally excludes a calendar the user has hidden without needing
+/// a separate allow/deny list of our own).
+fn list_calendar_ids(access_token: &str) -> Result<Vec<String>> {
+    let resp: CalendarListResponse = ureq::get("https://www.googleapis.com/calendar/v3/users/me/calendarList")
         .set("Authorization", &format!("Bearer {access_token}"))
-        .query("timeMin", &time_min)
-        .query("timeMax", &time_max)
+        .query("minAccessRole", "reader")
+        .call()
+        .context("listing calendars")?
+        .into_json()
+        .context("parsing calendar list response")?;
+    Ok(resp.items.into_iter().filter(|c| c.selected).map(|c| c.id).collect())
+}
+
+/// A calendar id ("primary", an email address, a `...@group.calendar.google.com`
+/// group id, or a system calendar like `en.uk#holiday@group.v.calendar.google.com`)
+/// sits in the URL *path*, not a query string -- ureq's `.query()` escaping
+/// doesn't apply there, so this hand-encodes the characters that actually
+/// show up in practice, matching this file's existing `urlencoding_scope`
+/// precedent rather than pulling in a URL-encoding crate for a handful of
+/// characters. `#` is the one that actually broke on a real account (a
+/// holiday calendar's id): left raw, it's parsed as a URL fragment
+/// separator, silently truncating the path and 404ing.
+fn encode_calendar_id(id: &str) -> String {
+    id.replace('@', "%40").replace('+', "%2B").replace('#', "%23")
+}
+
+fn fetch_events_for_calendar(access_token: &str, calendar_id: &str, time_min: &str, time_max: &str) -> Result<Vec<Event>> {
+    let url = format!(
+        "https://www.googleapis.com/calendar/v3/calendars/{}/events",
+        encode_calendar_id(calendar_id)
+    );
+    let resp: EventsResponse = ureq::get(&url)
+        .set("Authorization", &format!("Bearer {access_token}"))
+        .query("timeMin", time_min)
+        .query("timeMax", time_max)
         .query("singleEvents", "true")
         .query("orderBy", "startTime")
         .query("timeZone", "Europe/London")
         .query("maxResults", "250")
         .call()
-        .context("fetching calendar events")?
+        .with_context(|| format!("fetching events for calendar {calendar_id}"))?
         .into_json()
-        .context("parsing calendar events response")?;
+        .with_context(|| format!("parsing events response for calendar {calendar_id}"))?;
     Ok(resp.items)
+}
+
+/// Sort key for merging events from several calendars into one chronological
+/// list -- both `ymd()` and `hhmm()` are already zero-padded ISO-ish
+/// fragments, so plain string comparison orders correctly. An all-day event
+/// sorts before any timed event on the same day, matching how Google
+/// Calendar's own UI stacks them.
+fn sort_key(e: &Event) -> String {
+    format!("{}T{}", e.start.ymd(), e.start.hhmm().unwrap_or("00:00"))
+}
+
+/// Fetches events across every calendar visible in this account (not just
+/// "primary" -- a personal account routinely has Birthdays, Family, and
+/// other calendars the user actually wants to see) from now through
+/// `days_ahead` days out, in Europe/London wall-clock time (the API converts
+/// for us, same trick as Open-Meteo's `timezone` param -- see `weather.rs`'s
+/// module doc for why that's preferable to a bundled timezone database
+/// here). One flaky/inaccessible calendar is logged and skipped rather than
+/// failing the whole fetch -- a shared or subscribed calendar going missing
+/// shouldn't take the ones that still work down with it.
+pub fn fetch_events(days_ahead: i64) -> Result<Vec<Event>> {
+    let access_token = mint_access_token()?;
+    let time_min = Local::now().to_rfc3339();
+    let time_max = (Local::now() + Duration::days(days_ahead)).to_rfc3339();
+
+    let calendar_ids = list_calendar_ids(&access_token)?;
+    let mut events = Vec::new();
+    for calendar_id in &calendar_ids {
+        match fetch_events_for_calendar(&access_token, calendar_id, &time_min, &time_max) {
+            Ok(calendar_events) => events.extend(calendar_events),
+            Err(e) => eprintln!("Calendar {calendar_id}: fetch failed, skipping ({e:#})"),
+        }
+    }
+    events.sort_by(|a, b| sort_key(a).cmp(&sort_key(b)));
+    Ok(events)
 }
 
 /// Fingerprints the meaningful fields (title, start, end) of every fetched
