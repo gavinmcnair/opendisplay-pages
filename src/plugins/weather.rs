@@ -93,6 +93,25 @@ fn draw_rain_chart(img: &mut GrayImage, fonts: &Fonts, hourly: &weather::Hourly,
     render::draw_text(img, &fonts.arial_bold, 13.0, chart_x0, chart_top - 10.0, "RAIN %", DARK_GRAY);
     draw_line_segment_mut(img, (chart_x0, baseline), (chart_x1, baseline), Luma([BLACK]));
 
+    // Y-axis scale -- without this, a bar's height means nothing on its own
+    // (and a bare number next to it reads as "which axis is this" at a
+    // glance, exactly the confusion the per-bar temperature labels below
+    // have too). Three labelled reference lines (0/50/100%), not a full
+    // gridline-per-10% axis -- "don't care about fancy graphics" still
+    // rules that out, but an unlabelled chart doesn't meet even the plain
+    // bar-chart bar the module doc sets.
+    for pct in [0u8, 50, 100] {
+        let y = baseline - chart_h * (pct as f32 / 100.0);
+        if pct != 0 {
+            for x in (chart_x0 as i32..chart_x1 as i32).step_by(6) {
+                img.put_pixel(x as u32, y as u32, Luma([LIGHT_GRAY]));
+            }
+        }
+        let label = format!("{pct}");
+        let lw = text_width(&fonts.mono, 12.0, &label);
+        render::draw_text(img, &fonts.mono, 12.0, chart_x0 - lw - 8.0, y + 4.0, &label, DARK_GRAY);
+    }
+
     let slot_w = (chart_x1 - chart_x0) / n as f32;
     let bar_w = (slot_w * 0.6).max(1.0);
 
@@ -118,19 +137,15 @@ fn draw_rain_chart(img: &mut GrayImage, fonts: &Fonts, hourly: &weather::Hourly,
             render::draw_text(img, &fonts.mono, 13.0, cx - hlw / 2.0, baseline + 18.0, hour_label, DARK_GRAY);
 
             let temp = hourly.temperature_2m.get(i).copied().unwrap_or(0.0);
-            let temp_label = format!("{temp:.0}");
+            // "C" suffix isn't cosmetic here -- a bare number sitting inside
+            // a 0-100 rain-% chart reads as another percentage at a glance
+            // (a real ambiguity, not a hypothetical one: caught by exactly
+            // that misreading).
+            let temp_label = format!("{temp:.0}C");
             let tlw = text_width(&fonts.mono, 14.0, &temp_label);
             let temp_y = (y0 - 8.0).max(chart_top - 8.0);
             render::draw_text(img, &fonts.mono, 14.0, cx - tlw / 2.0, temp_y, &temp_label, BLACK);
         }
-    }
-
-    // Faint 50% reference line so a bar's height means something without a
-    // full axis -- "don't care about fancy graphics" ruled out gridlines
-    // every 10%, but one midpoint line is cheap and genuinely useful.
-    let mid_y = baseline - chart_h * 0.5;
-    for x in (chart_x0 as i32..chart_x1 as i32).step_by(6) {
-        img.put_pixel(x as u32, mid_y as u32, Luma([LIGHT_GRAY]));
     }
 }
 
