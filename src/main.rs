@@ -1,3 +1,4 @@
+mod air_quality;
 mod ble;
 mod calendar;
 mod patterns;
@@ -13,6 +14,7 @@ mod weather;
 use anyhow::Result;
 use image::GrayImage;
 use plugin::Plugin;
+use plugins::air_quality::AirQualityPlugin;
 use plugins::calendar_default::CalendarDefaultPlugin;
 use plugins::calendar_week::CalendarWeekPlugin;
 use plugins::index::IndexPlugin;
@@ -66,6 +68,7 @@ async fn main() -> Result<()> {
                 (WeatherPlugin.slot(), WeatherPlugin.name()),
                 (CalendarDefaultPlugin.slot(), CalendarDefaultPlugin.name()),
                 (CalendarWeekPlugin.slot(), CalendarWeekPlugin.name()),
+                (AirQualityPlugin.slot(), AirQualityPlugin.name()),
             ],
             scheduler::default_schedule(),
         );
@@ -85,6 +88,13 @@ async fn main() -> Result<()> {
     if let Some(path) = args.iter().position(|a| a == "--render-calendar-week").and_then(|i| args.get(i + 1)) {
         let mut cal = CalendarWeekPlugin;
         let (_, img) = cal.render(&fonts).await?;
+        img.save(path)?;
+        eprintln!("Saved {path} ({}x{})", img.width(), img.height());
+        return Ok(());
+    }
+    if let Some(path) = args.iter().position(|a| a == "--render-air-quality").and_then(|i| args.get(i + 1)) {
+        let mut aq = AirQualityPlugin;
+        let (_, img) = aq.render(&fonts).await?;
         img.save(path)?;
         eprintln!("Saved {path} ({}x{})", img.width(), img.height());
         return Ok(());
@@ -125,7 +135,13 @@ async fn main() -> Result<()> {
     // sync with what's actually running. Adding a future plugin is just one
     // more line in this Vec.
     let mut plugins: Vec<Box<dyn Plugin>> =
-        vec![Box::new(TrainsPlugin::new()), Box::new(WeatherPlugin), Box::new(CalendarDefaultPlugin), Box::new(CalendarWeekPlugin)];
+        vec![
+            Box::new(TrainsPlugin::new()),
+            Box::new(WeatherPlugin),
+            Box::new(CalendarDefaultPlugin),
+            Box::new(CalendarWeekPlugin),
+            Box::new(AirQualityPlugin),
+        ];
     let registry: Vec<(u8, &'static str)> = plugins.iter().map(|p| (p.slot(), p.name())).collect();
     let scheduler = scheduler::default_schedule();
     let mut index = IndexPlugin::new(registry, scheduler.clone());
