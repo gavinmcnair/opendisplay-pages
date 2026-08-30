@@ -71,7 +71,11 @@ async fn main() -> Result<()> {
                 (CalendarDefaultPlugin.slot(), CalendarDefaultPlugin.name()),
                 (CalendarWeekPlugin.slot(), CalendarWeekPlugin.name()),
                 (AirQualityPlugin.slot(), AirQualityPlugin.name()),
-                (AirQualityHistoryPlugin.slot(), AirQualityHistoryPlugin.name()),
+                // AirQualityHistoryPlugin (slot 6) deliberately NOT registered
+                // here -- it barely changes day to day, which makes it feel
+                // static/useless as a permanent slot competing with pages that
+                // are actually worth checking "right now". Still generatable
+                // on demand via --render-pollen-history below.
             ],
             scheduler::default_schedule(),
         );
@@ -151,7 +155,8 @@ async fn main() -> Result<()> {
             Box::new(CalendarDefaultPlugin),
             Box::new(CalendarWeekPlugin),
             Box::new(AirQualityPlugin),
-            Box::new(AirQualityHistoryPlugin),
+            // AirQualityHistoryPlugin (slot 6) not included -- see the
+            // matching comment at the --render-index registry above.
         ];
     let registry: Vec<(u8, &'static str)> = plugins.iter().map(|p| (p.slot(), p.name())).collect();
     let scheduler = scheduler::default_schedule();
