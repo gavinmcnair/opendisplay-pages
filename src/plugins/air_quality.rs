@@ -66,18 +66,55 @@ fn uv_category(uv: f32) -> &'static str {
     }
 }
 
+/// Same risk bands as the chart's own Y-axis (`air_quality::draw_pollen_y_axis`,
+/// 0/10/50/150 grains/m3) -- the summary line and the chart it sits above
+/// should never disagree about what "high" means.
+fn pollen_category(p: f32) -> &'static str {
+    match p {
+        v if v < 1.0 => "NONE",
+        v if v < 10.0 => "LOW",
+        v if v < 50.0 => "MODERATE",
+        v if v < 150.0 => "HIGH",
+        _ => "VERY HIGH",
+    }
+}
+
+/// Which of today's four pollen series peaks highest, and by how much --
+/// the answer to "what kind of pollen" the summary line states outright,
+/// rather than leaving it to the chart legend below to explain (real
+/// panel size makes that legend small print, not a glance-and-know answer).
+fn dominant_pollen(hourly: &Hourly) -> Option<(&'static str, f32)> {
+    let n = hourly.grass_pollen.len();
+    if n == 0 {
+        return None;
+    }
+    let day_max = |v: &[f32]| v.iter().cloned().fold(0.0f32, f32::max);
+    let weed_max = (0..n).map(|i| hourly.mugwort_pollen[i].max(hourly.ragweed_pollen[i])).fold(0.0f32, f32::max);
+    let candidates = [
+        ("GRASS", day_max(&hourly.grass_pollen)),
+        ("BIRCH", day_max(&hourly.birch_pollen)),
+        ("ALDER", day_max(&hourly.alder_pollen)),
+        ("WEED", weed_max),
+    ];
+    candidates.into_iter().max_by(|a, b| a.1.partial_cmp(&b.1).unwrap())
+}
+
 fn render_page(fonts: &Fonts, forecast: &Forecast) -> GrayImage {
     let mut img = GrayImage::from_pixel(W, H, Luma([WHITE]));
 
     render::draw_text(&mut img, &fonts.arial_bold, 13.0, 26.0, 22.0 + 13.0, "EGHAM AIR QUALITY", DARK_GRAY);
     render::draw_text(&mut img, &fonts.arial_black, 40.0, 26.0, 76.0, "AIR & POLLEN", BLACK);
 
+    let pollen_note = dominant_pollen(&forecast.hourly)
+        .map(|(name, peak)| format!("  \u{b7}  {name} POLLEN {}", pollen_category(peak)))
+        .unwrap_or_default();
     let summary = format!(
-        "AQI {:.0} {}  \u{b7}  UV {:.0} {}",
+        "AQI {:.0} {}  \u{b7}  UV {:.0} {}{}",
         forecast.current.european_aqi,
         aqi_category(forecast.current.european_aqi),
         forecast.current.uv_index,
-        uv_category(forecast.current.uv_index)
+        uv_category(forecast.current.uv_index),
+        pollen_note
     );
     render::draw_text(&mut img, &fonts.arial_bold, 15.0, 26.0, 98.0, &summary, DARK_GRAY);
 
