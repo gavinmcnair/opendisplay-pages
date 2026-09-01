@@ -1,0 +1,35 @@
+# TrueNAS SCALE: install as a Custom App via "Install via YAML" and paste
+# this in (adjust the volume host path and env values). Every non-obvious
+# setting here is load-bearing:
+#
+# - network_mode: host -- REQUIRED, not a convenience: Bluetooth HCI sockets
+#   (AF_BLUETOOTH) live in the network namespace, so a bridged container
+#   cannot see the dongle at all, regardless of device passthrough.
+# - privileged -- the container runs its own bluetoothd against the host's
+#   hci0 (needs raw HCI access; CAP_NET_ADMIN+CAP_NET_RAW can work instead
+#   but privileged avoids chasing BlueZ's D-Bus policy edge cases on a NAS).
+# - restart: unless-stopped -- the poller has died to lid-closes, battery
+#   deaths, and manual kills when run by hand; let Docker be the supervisor.
+# - /data volume -- per-slot change-detection fingerprints
+#   (egham_state_slot*.txt) live in the workdir; without a volume every
+#   restart repushes all six slots to the panel unnecessarily.
+#
+# The host must show the dongle before this app can work:
+#   ls /sys/class/bluetooth        # expect: hci0
+#   dmesg | grep -i bluetooth      # btusb + firmware load messages
+services:
+  egham-ble:
+    build: .
+    # Or a prebuilt image reference, e.g. ghcr.io/gavinmcnair/egham-ble:latest
+    network_mode: host
+    privileged: true
+    restart: unless-stopped
+    environment:
+      TZ: Europe/London
+      # TRAINTIMES_BASE_URL defaults to https://trainapi.41rpa.uk -- set it
+      # here to point at a LAN address instead.
+      GOOGLE_CALENDAR_CLIENT_ID: ${GOOGLE_CALENDAR_CLIENT_ID}
+      GOOGLE_CALENDAR_CLIENT_SECRET: ${GOOGLE_CALENDAR_CLIENT_SECRET}
+      GOOGLE_CALENDAR_REFRESH_TOKEN: ${GOOGLE_CALENDAR_REFRESH_TOKEN}
+    volumes:
+      - /mnt/tank/apps/egham-ble:/data

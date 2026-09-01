@@ -1,0 +1,7 @@
+# Never let secrets or junk into the image build context.
+target
+calendar_token.txt
+egham_state*.txt
+poll.log
+*.png
+.git

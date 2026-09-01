@@ -95,6 +95,34 @@ binary (gitignored) — a page is only re-pushed to the device when its content
 fingerprint actually changes, so e.g. the trains page's 10-second poll (see
 `plugins::trains`) doesn't re-transfer an unchanged board.
 
+## Docker / TrueNAS SCALE deployment
+
+The target deployment is a TrueNAS SCALE Custom App with a USB Bluetooth
+dongle (ASUS BT-series) — `Dockerfile`, `entrypoint.sh`, and
+`docker-compose.yml` are the packaging, and each documents its own
+non-obvious requirements. The short version:
+
+- **Fonts are embedded in the binary** (`fonts/`, `include_bytes!`) — the
+  image has no runtime font dependencies.
+- **The container runs its own BlueZ**: `btleplug` on Linux needs
+  `bluetoothd` over D-Bus, and the TrueNAS host doesn't run one.
+  `entrypoint.sh` starts `dbus-daemon` + `bluetoothd`, waits for `hci0`,
+  powers the adapter, then execs `egham_ble`.
+- **`network_mode: host` is mandatory** — Bluetooth HCI sockets are
+  network-namespaced; a bridged container can never see the adapter.
+- **The dongle's driver/firmware are the host kernel's job** (`btusb`).
+  Before installing the app, confirm the host sees it:
+  `ls /sys/class/bluetooth` should show `hci0` (and
+  `dmesg | grep -i bluetooth` shows the firmware load).
+- **`TZ=Europe/London`** in the container — the scheduler's trains window
+  is local wall-clock time.
+- **Mount a host path at `/data`** for the fingerprint state files, or
+  every restart repushes all slots.
+- The credentials (`GOOGLE_CALENDAR_*`, optional `TRAINTIMES_BASE_URL`) go
+  in the app's environment settings.
+- The e-ink panel must be within BLE range **of the NAS**, not of wherever
+  this used to run.
+
 ## Google Calendar setup
 
 Unlike RTT/Open-Meteo, Google Calendar needs real user consent, not just an
