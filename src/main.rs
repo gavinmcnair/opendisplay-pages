@@ -15,7 +15,7 @@ mod weather;
 use anyhow::{Context, Result};
 use plugin::Plugin;
 use plugins::air_quality::AirQualityPlugin;
-use plugins::battery::BatteryPlugin;
+use plugins::stats::StatsPlugin;
 use plugins::calendar_default::CalendarDefaultPlugin;
 use plugins::calendar_week::CalendarWeekPlugin;
 use plugins::index::IndexPlugin;
@@ -82,7 +82,7 @@ async fn main() -> Result<()> {
     // nothing below this needs to change, including every --render-able
     // escape hatch, since all of them go through the Plugin trait generically.
     let mut plugins: Vec<Box<dyn Plugin>> = vec![
-        Box::new(BatteryPlugin::new()),
+        Box::new(StatsPlugin::new()),
         Box::new(TrainsPlugin::new()),
         Box::new(WeatherPlugin),
         Box::new(CalendarDefaultPlugin),

@@ -35,7 +35,7 @@ Three layers, each only aware of the one below it:
 | Plugin | Slot | Source | Status label |
 |---|---|---|---|
 | `plugins::index` | 0 | built from every other plugin's `(slot, name)` | `PRESS KEY1 / KEY2 TO BROWSE` |
-| `plugins::battery` | 1 | the panel itself (CMD_READ_MSD over BLE, hourly) | `PANEL BATTERY MONITOR` |
+| `plugins::stats` | 1 | the panel itself (battery/fw/RSSI over BLE, hourly) | `PANEL SYSTEM STATS` |
 | `plugins::trains` | 2 | Gavin's own self-hosted `traintimes` service (Darwin via Kafka) | `TRAINTIMES LIVE` |
 | `plugins::weather` | 3 | [Open-Meteo](https://open-meteo.com/) | `ALL-DAY RAIN FORECAST` |
 | `plugins::calendar_default` | 4 | Google Calendar (today + tomorrow, agenda) | `GOOGLE CALENDAR` |

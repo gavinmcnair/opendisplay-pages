@@ -1,9 +1,12 @@
-//! Battery page (slot 1): the panel's own battery, one voltage reading per
-//! hour drawn as a 7-day line graph, with the current state of charge as a
-//! big headline number. Unlike every other page, the data source is the
-//! panel itself: `ble::read_msd` (CMD_READ_MSD, 0x0044) returns the same
-//! 16-byte telemetry buffer the device broadcasts in its advertising data --
-//! battery voltage in 10mV units plus chip temperature.
+//! Stats page (slot 1): the panel's own system stats -- battery state of
+//! charge (one reading per hour, drawn as a 7-day line graph, current value
+//! as the big headline number), firmware version, hardware/power labels,
+//! and BLE signal strength. Unlike every other page, the data source is the
+//! panel itself: `ble::read_telemetry` (CMD_READ_MSD 0x0044 +
+//! CMD_FIRMWARE_VERSION 0x43) returns the 16-byte telemetry buffer the
+//! device broadcasts in its advertising data -- battery voltage in 10mV
+//! units plus chip temperature -- and the firmware version; the RSSI comes
+//! from the discovery scan.
 //!
 //! Voltage -> state-of-charge uses the `battery-estimator` crate with its
 //! Li-Ion curve, matching the device config's own choice
@@ -38,8 +41,8 @@ use crate::plugin::{self, Plugin};
 use crate::render::{self, text_width, Fonts, BLACK, DARK_GRAY, H, LIGHT_GRAY, W, WHITE};
 
 pub const SLOT: u8 = 1;
-const NAME: &str = "Egham Battery";
-const STATUS_LABEL: &str = "PANEL BATTERY MONITOR";
+const NAME: &str = "Device Stats";
+const STATUS_LABEL: &str = "PANEL SYSTEM STATS";
 
 const HISTORY_FILE: &str = "battery_history.txt";
 /// One column per hour for a week -- matches the poll cadence below.
@@ -80,17 +83,17 @@ struct SysInfo {
     rssi_dbm: Option<i16>,
 }
 
-pub struct BatteryPlugin {
+pub struct StatsPlugin {
     sys: Option<SysInfo>,
 }
 
-impl BatteryPlugin {
+impl StatsPlugin {
     pub fn new() -> Self {
         Self { sys: None }
     }
 }
 
-impl Plugin for BatteryPlugin {
+impl Plugin for StatsPlugin {
     fn slot(&self) -> u8 {
         SLOT
     }
@@ -211,7 +214,7 @@ fn render_page(fonts: &Fonts, history: &[Sample], sys: Option<&SysInfo>) -> Gray
     let mut img = GrayImage::from_pixel(W, H, Luma([WHITE]));
 
     render::draw_text(&mut img, &fonts.sans_bold, 13.0, 26.0, 22.0 + 13.0, "EGHAM DISPLAY", DARK_GRAY);
-    render::draw_text(&mut img, &fonts.sans_black, 40.0, 26.0, 76.0, "BATTERY", BLACK);
+    render::draw_text(&mut img, &fonts.sans_black, 40.0, 26.0, 76.0, "DEVICE STATS", BLACK);
 
     // Headline: big SOC percentage top-right, voltage + temperature + ETA in
     // the summary line under the title -- same layout grammar as the weather
@@ -227,7 +230,12 @@ fn render_page(fonts: &Fonts, history: &[Sample], sys: Option<&SysInfo>) -> Gray
         let pct_text = soc.map_or("--%".to_string(), |p| format!("{p:.0}%"));
         let pw = text_width(&fonts.sans_black, 44.0, &pct_text);
         render::draw_text(&mut img, &fonts.sans_black, 44.0, W as f32 - 26.0 - pw, 56.0, &pct_text, BLACK);
-        let sub = format!("{volts:.2}V \u{b7} {:.0}C", last.temp_c);
+        // "CHIP": this is the ESP32's internal die sensor (firmware's
+        // readChipTemperature() -> temperatureRead()), NOT a battery
+        // thermistor -- the board has none. It runs a few degrees above
+        // ambient from self-heating; labeled so nobody reads it as either
+        // battery or room temperature.
+        let sub = format!("{volts:.2}V \u{b7} CHIP {:.0}C", last.temp_c);
         let sw = text_width(&fonts.sans_bold, 14.0, &sub);
         render::draw_text(&mut img, &fonts.sans_bold, 14.0, W as f32 - 26.0 - sw, 78.0, &sub, DARK_GRAY);
 
