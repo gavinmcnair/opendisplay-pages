@@ -24,14 +24,13 @@ fn base_url() -> String {
 }
 
 /// One `StationCall` -- see that repo's `API.md` for the full field-by-field
-/// rationale. Only the fields this plugin actually renders are modeled here;
-/// serde ignores the rest (`ssd`, `origin`/`destination` TIPLOCs,
-/// `direction_index`, `total_stops`, `platform_confirmed`,
-/// `platform_changed`, `last_updated`) rather than carrying fields nothing
-/// reads.
+/// rationale. Only the fields this plugin actually renders are modeled here
+/// (they are also exactly what `hash_call` fingerprints); serde ignores the
+/// rest (`rid`, `uid`, `ssd`, TIPLOCs, `direction_index`, `total_stops`,
+/// `delay_minutes`, `platform*`, `train_status`, `last_updated`) rather than
+/// carrying fields nothing reads.
 #[derive(Deserialize, Debug, Clone)]
 pub struct StationCall {
-    pub rid: String,
     pub origin_name: Option<String>,
     pub destination_name: Option<String>,
     /// Real absolute UTC instants ("...Z"), not the bare local-time strings
@@ -40,8 +39,6 @@ pub struct StationCall {
     pub scheduled: Option<String>,
     pub estimated: Option<String>,
     pub actual: Option<String>,
-    pub delay_minutes: Option<i32>,
-    pub platform: Option<String>,
     /// `Pending|Cancelled|Departed|Arrived` -- describes this call only, and
     /// is now authoritative for cancellation (replacing the old raw
     /// `cancelled: bool` RTT/self-built heuristic).
@@ -75,16 +72,17 @@ pub fn is_cancelled(c: &StationCall) -> bool {
     c.stop_status == "Cancelled"
 }
 
-/// Hashes the *meaningful* content of one call -- same role as the old
-/// `rtt::hash_departure`, used by `plugins::trains` to fingerprint its
-/// filtered, currently-displayed view.
+/// Hashes exactly what `plugins::trains` renders from one call -- nothing
+/// more. Fields the page never draws (`rid`, `platform`, `delay_minutes`)
+/// are deliberately excluded: Darwin flipping an unconfirmed platform
+/// suggestion used to repush pixel-identical content over BLE, the exact
+/// spurious-refresh class the server-side to/via filtering exists to avoid.
+/// (`delay_minutes` is derived from `estimated` vs `scheduled`, both already
+/// hashed, so dropping it loses nothing.)
 pub(crate) fn hash_call(c: &StationCall, hasher: &mut DefaultHasher) {
-    c.rid.hash(hasher);
     c.scheduled.hash(hasher);
     c.estimated.hash(hasher);
     c.actual.hash(hasher);
-    c.delay_minutes.hash(hasher);
-    c.platform.hash(hasher);
     c.stop_status.hash(hasher);
     c.origin_name.hash(hasher);
     c.destination_name.hash(hasher);

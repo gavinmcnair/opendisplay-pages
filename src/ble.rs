@@ -41,6 +41,7 @@ pub async fn find_and_connect(device_name: &str) -> Result<Peripheral> {
             break p;
         }
         if tokio::time::Instant::now() >= deadline {
+            let _ = adapter.stop_scan().await; // don't leave the adapter scanning forever on the failure path
             bail!("device '{device_name}' not found within {SCAN_TIMEOUT:?}");
         }
         tokio::time::sleep(Duration::from_millis(300)).await;
@@ -175,8 +176,12 @@ async fn run_pipe_write(
     if total == 0 {
         bail!("nothing to send");
     }
-    if total > 256 {
-        bail!("payload needs {total} frames, exceeds the 8-bit sequence space (256) this simple sender supports");
+    if total > 255 {
+        // 255, not 256: `confirmed` below is a u8 *count* of confirmed
+        // frames, so exactly 256 frames would make its exit condition
+        // (`confirmed as usize >= total`) unsatisfiable -- an infinite
+        // resend loop, not a clean failure.
+        bail!("payload needs {total} frames, exceeds the 255-frame limit this simple sender supports");
     }
 
     let mut confirmed: u8 = 0; // number of chunks (0..total) confirmed contiguous from the start

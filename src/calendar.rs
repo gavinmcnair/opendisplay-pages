@@ -3,13 +3,13 @@
 //! genuine user-consent OAuth dance (no public read-only endpoint), so this
 //! file also owns the one-time interactive `--calendar-auth` setup flow.
 //!
-//! Credentials are deliberately NOT hardcoded like RTT's refresh token --
-//! this repo is public, and a Google refresh token grants ongoing read
-//! access to a real personal calendar, a different sensitivity class from a
-//! rate-limited public transit API key. `GOOGLE_CALENDAR_CLIENT_ID`/
-//! `_CLIENT_SECRET` come from the environment; the long-life refresh token
-//! is written to `calendar_token.txt` next to the binary (gitignored, same
-//! pattern as `egham_state_slot*.txt`) and never appears in source or logs.
+//! Credentials are never hardcoded -- this repo is public, and a Google
+//! refresh token grants ongoing read access to a real personal calendar.
+//! All three come from the environment: `GOOGLE_CALENDAR_CLIENT_ID`,
+//! `GOOGLE_CALENDAR_CLIENT_SECRET`, and `GOOGLE_CALENDAR_REFRESH_TOKEN`
+//! (see `refresh_token()` -- the `calendar_token.txt` file the one-time
+//! OAuth flow writes is kept only as a legacy fallback, gitignored, and
+//! never appears in source or logs).
 
 use anyhow::{bail, Context, Result};
 use chrono::{Duration, Local};
@@ -98,6 +98,10 @@ pub fn run_oauth_flow() -> Result<()> {
         .ok_or_else(|| anyhow::anyhow!("no refresh_token in response -- retry with prompt=consent (already set)"))?;
     std::fs::write(TOKEN_FILE, &refresh_token).context("saving refresh token")?;
     eprintln!("Saved refresh token to {TOKEN_FILE}. Calendar fetches will work from now on.");
+    eprintln!(
+        "Preferred: move it to the environment instead (the file is only a fallback):\n\
+         \n    export GOOGLE_CALENDAR_REFRESH_TOKEN=\"$(cat {TOKEN_FILE})\"\n"
+    );
     Ok(())
 }
 
@@ -119,16 +123,31 @@ fn extract_code(request_line: &str) -> Option<String> {
     None
 }
 
-fn mint_access_token() -> Result<String> {
-    if !Path::new(TOKEN_FILE).exists() {
-        bail!("{TOKEN_FILE} not found -- run `egham_ble --calendar-auth` once to set up Google Calendar access");
+/// The long-life refresh token, from `GOOGLE_CALENDAR_REFRESH_TOKEN` (the
+/// canonical home -- all credentials live in env vars), falling back to the
+/// legacy `calendar_token.txt` the OAuth flow writes, so a machine set up
+/// before the env-var convention keeps working unmodified.
+fn refresh_token() -> Result<String> {
+    if let Ok(t) = std::env::var("GOOGLE_CALENDAR_REFRESH_TOKEN") {
+        if !t.trim().is_empty() {
+            return Ok(t.trim().to_string());
+        }
     }
-    let refresh_token = std::fs::read_to_string(TOKEN_FILE).context("reading refresh token")?;
-    let refresh_token = refresh_token.trim();
+    if !Path::new(TOKEN_FILE).exists() {
+        bail!(
+            "GOOGLE_CALENDAR_REFRESH_TOKEN not set and {TOKEN_FILE} not found -- \
+             run `egham_ble --setup calendar` once to set up Google Calendar access"
+        );
+    }
+    Ok(std::fs::read_to_string(TOKEN_FILE).context("reading refresh token")?.trim().to_string())
+}
+
+fn mint_access_token() -> Result<String> {
+    let refresh_token = refresh_token()?;
 
     let resp: TokenResponse = ureq::post(TOKEN_ENDPOINT)
         .send_form(&[
-            ("refresh_token", refresh_token),
+            ("refresh_token", &refresh_token),
             ("client_id", &client_id()?),
             ("client_secret", &client_secret()?),
             ("grant_type", "refresh_token"),

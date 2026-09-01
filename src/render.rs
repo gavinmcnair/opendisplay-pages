@@ -86,11 +86,14 @@ pub fn text_width(font: &Font, size: f32, text: &str) -> f32 {
     text.chars().map(|c| font.metrics(c, size).advance_width).sum()
 }
 
-/// Truncates `text` (from the end) until it fits within `max_w` at this font/size.
+/// Truncates `text` (from the end) until it fits within `max_w` at this
+/// font/size. Removes whole chars, never bytes: `String::truncate` panics on
+/// a non-char-boundary cut, and calendar event titles (user-authored) freely
+/// contain multi-byte chars -- one accented title must not kill the poller.
 pub fn truncate_to_width(font: &Font, size: f32, text: &str, max_w: f32) -> String {
     let mut s = text.to_string();
-    while text_width(font, size, &s) > max_w && s.len() > 4 {
-        s.truncate(s.len().saturating_sub(2));
+    while text_width(font, size, &s) > max_w && s.chars().count() > 4 {
+        s.pop();
     }
     s
 }
@@ -99,8 +102,8 @@ pub fn truncate_to_width(font: &Font, size: f32, text: &str, max_w: f32) -> Stri
 /// with no natural "as of" timestamp of its own to show in its status bar
 /// (e.g. the index, or weather where the forecast's own hour-0 entry is
 /// always midnight, not "now") -- labeled UTC so it's never confused with a
-/// data source's own precise local time (trains uses RTT's, which already
-/// accounts for GMT/BST).
+/// data source's own local-time values (trains converts its API's UTC
+/// instants to local, GMT/BST-aware, via chrono).
 pub fn current_time_utc_hhmm() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     let secs = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);

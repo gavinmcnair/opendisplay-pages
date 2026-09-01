@@ -25,15 +25,21 @@ use std::time::{Duration, Instant};
 
 const DEVICE_NAME: &str = "ODC48BB0";
 
-// The loop's own tick rate -- both the schedule's boundaries (e.g. 07:00,
-// 08:30, which need finer granularity than any plugin's content-poll
-// interval) and each plugin's own `poll_interval()` (plugin.rs) are checked
-// against this cadence, so neither can fire more often than this even if
-// they wanted to. Each external API stays well under its own budget at this
-// rate regardless of a plugin's `poll_interval()`: a plugin like trains.rs
-// that renders every tick still paces its own real network calls internally
-// (see its RTT_CACHE_TTL) rather than calling out every tick.
+// Ceiling on how long the loop sleeps between passes -- the schedule's
+// boundaries (e.g. 07:00, 08:30) are checked at least this often. It is NOT
+// a floor on plugin polling: the loop sleeps until the *earliest* plugin's
+// `next_poll` deadline or this interval, whichever comes first, so a plugin
+// with a fast `poll_interval()` (trains at 10s) actually gets called that
+// often instead of being silently rounded up to this value (a real bug this
+// replaced: a fixed 60s sleep made every faster interval a dead letter).
 const SCHEDULE_TICK_INTERVAL: Duration = Duration::from_secs(60);
+
+// Single-instance guard port. Two pollers racing on the same BLE device and
+// state files corrupts both (observed live, 2026-09-01: interleaved
+// poll.log writes and a missed panel update). A bound localhost port is a
+// self-releasing lock: the OS frees it on any exit, clean or not, so there
+// is no stale pidfile case to handle.
+const INSTANCE_LOCK_PORT: u16 = 48412;
 
 fn state_path_for_slot(slot: u8) -> PathBuf {
     PathBuf::from(format!("egham_state_slot{slot}.txt"))
@@ -55,7 +61,14 @@ fn state_path_for_slot(slot: u8) -> PathBuf {
 /// default-overridable methods.
 fn find_plugin<'a>(plugins: &'a mut [Box<dyn Plugin>], id: &str) -> Option<&'a mut Box<dyn Plugin>> {
     let id_lower = id.to_lowercase();
-    plugins.iter_mut().find(|p| p.slot().to_string() == id || p.name().to_lowercase().contains(&id_lower))
+    // Also try the query minus a trailing 's': "trains" should find "Egham
+    // Train Times" ("trains" isn't a substring of "train times" -- a real
+    // miss someone hit at the CLI, not a hypothetical).
+    let id_singular = id_lower.trim_end_matches('s');
+    plugins.iter_mut().find(|p| {
+        let name = p.name().to_lowercase();
+        p.slot().to_string() == id || name.contains(&id_lower) || name.contains(id_singular)
+    })
 }
 
 #[tokio::main]
@@ -139,6 +152,13 @@ async fn main() -> Result<()> {
 
     let once = args.iter().any(|a| a == "--once");
 
+    // Held for the life of the process; deliberately AFTER the --render/
+    // --setup/--compress-test escape hatches above, which are safe (and
+    // useful) to run while a poller is already up.
+    let _instance_lock = std::net::TcpListener::bind(("127.0.0.1", INSTANCE_LOCK_PORT)).context(
+        "another egham_ble instance appears to be running (instance lock port busy) -- kill it first",
+    )?;
+
     let mut last_fingerprints: Vec<Option<u64>> =
         plugins.iter().map(|p| state::load(&state_path_for_slot(p.slot()))).collect();
 
@@ -217,7 +237,12 @@ async fn main() -> Result<()> {
         if once {
             return Ok(());
         }
-        tokio::time::sleep(SCHEDULE_TICK_INTERVAL).await;
+        // Sleep until the earliest plugin poll deadline, capped at
+        // SCHEDULE_TICK_INTERVAL so schedule boundaries are still checked at
+        // least that often -- see that constant's comment.
+        let schedule_deadline = Instant::now() + SCHEDULE_TICK_INTERVAL;
+        let wake = next_poll.iter().min().copied().unwrap_or(schedule_deadline).min(schedule_deadline);
+        tokio::time::sleep_until(tokio::time::Instant::from_std(wake)).await;
     }
 }
 

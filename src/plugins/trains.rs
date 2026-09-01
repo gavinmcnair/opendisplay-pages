@@ -1,13 +1,12 @@
-//! Trains page (slot 1): live Egham departures by physical platform, not by
-//! ultimate destination. Egham has exactly two platforms -- Platform 1
-//! (east, towards London Waterloo) and Platform 2 (west, towards Reading,
-//! Ascot, Chertsey, Woking and everything beyond) -- so a westbound train's
-//! specific destination (Reading one service, Woking via Chertsey the next)
-//! doesn't change which platform it leaves from. Earlier versions of this
-//! page split westbound trains into separate per-destination columns; that
-//! was wrong (a passenger stands on a platform, not in front of a
-//! destination). The bottom status bar comes from `plugin::draw_status_bar`,
-//! shared with every other page.
+//! Trains page (slot 1): the two Egham journeys actually being caught, one
+//! per physical platform -- Platform 1 (east): Waterloo via Richmond;
+//! Platform 2 (west): the Chertsey branch (Weybridge direction). This is a
+//! DELIBERATELY narrowed board, not "all departures": Waterloo services
+//! running the Hounslow loop and Reading/Ascot-line services (which diverge
+//! at Virginia Water and never pass Chertsey) are intentionally excluded --
+//! they aren't journeys anyone in this house catches, and a narrower board
+//! also changes less often, meaning fewer e-ink repushes. The bottom status
+//! bar comes from `plugin::draw_status_bar`, shared with every other page.
 //!
 //! Fetches from Gavin's own self-hosted traintimes service (`traintimes.rs`),
 //! not RTT directly -- see that module's doc comment. Server-side
@@ -45,14 +44,16 @@ const NAME: &str = "Egham Train Times";
 const STATUS_LABEL: &str = "TRAINTIMES LIVE";
 
 /// Platform 1 (east): specifically Waterloo-via-Richmond, not just any
-/// Waterloo-bound working -- `via` stacks as an independent AND alongside
-/// `to` (see `traintimes::fetch_departures`).
+/// Waterloo-bound working (`via` stacks as an independent AND alongside
+/// `to`, see `traintimes::fetch_departures`) -- Hounslow-loop Waterloo
+/// services are deliberately excluded, see the module doc.
 const EAST_TO: &str = "WAT";
 const EAST_VIA: &str = "RMD";
-/// Platform 2 (west): everything heading in the Chertsey direction --
-/// Chertsey sits on the line west of Egham before it forks further (Reading,
-/// Ascot, Woking, Weybridge, ...), so `to=CHY` alone catches all of it
-/// without needing a `via` on top.
+/// Platform 2 (west): the Chertsey branch only. The Windsor lines fork at
+/// Virginia Water (the next stop west): Chertsey/Weybridge one way,
+/// Reading/Ascot the other -- so `to=CHY` deliberately shows just the
+/// Weybridge-direction services and excludes Reading/Ascot trains entirely,
+/// see the module doc.
 const WEST_TO: &str = "CHY";
 
 pub struct TrainsPlugin;

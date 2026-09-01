@@ -12,12 +12,11 @@ use std::time::Duration;
 
 use crate::render::{self, Fonts, BLACK, DARK_GRAY, W};
 
-/// Default `Plugin::poll_interval` -- matches `main.rs`'s external-API rate
-/// budgeting comment (RTT/Open-Meteo/Google Calendar all stay comfortably
-/// under their limits at this cadence). A plugin that needs to look fresher
-/// without calling out more often (see `plugins::trains`) overrides this to
-/// something faster and does its own internal caching to keep the real
-/// network-call rate unchanged.
+/// Default `Plugin::poll_interval` -- Open-Meteo and Google Calendar both
+/// stay comfortably under their rate limits at this cadence. A plugin backed
+/// by a source with no limit worth respecting (see `plugins::trains`, which
+/// polls Gavin's own self-hosted service) overrides this to something much
+/// faster and genuinely fetches every call.
 pub const DEFAULT_POLL_INTERVAL: Duration = Duration::from_secs(300);
 
 pub trait Plugin {
@@ -54,16 +53,14 @@ pub trait Plugin {
         false
     }
 
-    /// How often the orchestrator calls `render()` at all. This is a ceiling
-    /// on how often a plugin's *own* network fetch runs only for a plugin
-    /// that fetches fresh data every call (the default, and true of
-    /// weather/calendar/index) -- it is NOT the same knob as "how often does
-    /// this plugin hit its API": a plugin can override this to something
-    /// fast and still cache its own fetch internally, calling out only every
-    /// Nth invocation, to re-render and re-fingerprint more often than it
-    /// re-fetches (see `plugins::trains`, which re-derives "has this train
-    /// already left" from wall-clock time on every call without a new RTT
-    /// request).
+    /// How often the orchestrator calls `render()`. For every current plugin
+    /// this is also how often its network fetch runs (each one fetches fresh
+    /// data every call), but the two aren't inherently the same knob: a
+    /// plugin whose API needs protecting could override this to something
+    /// fast and cache its own fetch internally, re-rendering and
+    /// re-fingerprinting more often than it re-fetches. The orchestrator's
+    /// loop honors this properly -- it sleeps until the earliest plugin's
+    /// deadline, not a fixed global tick (see `main.rs`).
     fn poll_interval(&self) -> Duration {
         DEFAULT_POLL_INTERVAL
     }
