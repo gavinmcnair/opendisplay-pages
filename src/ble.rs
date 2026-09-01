@@ -10,6 +10,11 @@ use uuid::Uuid;
 
 use crate::protocol::{self, DataResponse, PipeParams, SlotSwitchResponse, StartResponse};
 
+/// The panel's BLE advertised name. Lives here (fundamentals) rather than
+/// main.rs because plugins that source their data over BLE (see
+/// `plugins::battery`) need it too, not just the orchestrator's push path.
+pub const DEVICE_NAME: &str = "ODC48BB0";
+
 const NOTIFY_TIMEOUT: Duration = Duration::from_secs(30);
 const SCAN_TIMEOUT: Duration = Duration::from_secs(20);
 // btleplug's connect()/discover_services() have no timeout of their own --
@@ -28,6 +33,15 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const OP_TIMEOUT: Duration = Duration::from_secs(60);
 
 pub async fn find_and_connect(device_name: &str) -> Result<Peripheral> {
+    Ok(find_and_connect_with_rssi(device_name).await?.0)
+}
+
+/// Like `find_and_connect`, but also reports the advertising RSSI observed
+/// while scanning for the device -- an honest "how good is the link to the
+/// panel from here" number, captured for free from the discovery pass
+/// (btleplug has no cross-platform connected-RSSI read). `None` when the
+/// platform didn't attach an RSSI to the advertisement.
+pub async fn find_and_connect_with_rssi(device_name: &str) -> Result<(Peripheral, Option<i16>)> {
     let manager = Manager::new().await.context("creating BLE manager")?;
     let adapters = manager.adapters().await.context("listing BLE adapters")?;
     let adapter = adapters.into_iter().next().ok_or_else(|| anyhow!("no BLE adapter found"))?;
@@ -35,10 +49,10 @@ pub async fn find_and_connect(device_name: &str) -> Result<Peripheral> {
     adapter.start_scan(ScanFilter::default()).await.context("starting BLE scan")?;
 
     let deadline = tokio::time::Instant::now() + SCAN_TIMEOUT;
-    let peripheral = loop {
-        if let Some(p) = find_by_name(&adapter, device_name).await? {
+    let (peripheral, rssi) = loop {
+        if let Some(found) = find_by_name(&adapter, device_name).await? {
             let _ = adapter.stop_scan().await;
-            break p;
+            break found;
         }
         if tokio::time::Instant::now() >= deadline {
             let _ = adapter.stop_scan().await; // don't leave the adapter scanning forever on the failure path
@@ -55,14 +69,15 @@ pub async fn find_and_connect(device_name: &str) -> Result<Peripheral> {
         .await
         .map_err(|_| anyhow!("GATT service discovery timed out after {CONNECT_TIMEOUT:?}"))?
         .context("discovering GATT services")?;
-    Ok(peripheral)
+    Ok((peripheral, rssi))
 }
 
-async fn find_by_name(adapter: &btleplug::platform::Adapter, name: &str) -> Result<Option<Peripheral>> {
+async fn find_by_name(adapter: &btleplug::platform::Adapter, name: &str) -> Result<Option<(Peripheral, Option<i16>)>> {
     for p in adapter.peripherals().await? {
         if let Ok(Some(props)) = p.properties().await {
             if props.local_name.as_deref() == Some(name) {
-                return Ok(Some(p));
+                let rssi = props.rssi;
+                return Ok(Some((p, rssi)));
             }
         }
     }
@@ -133,6 +148,101 @@ async fn switch_to_slot_inner(peripheral: &Peripheral, slot_id: u8) -> Result<()
     match resp? {
         SlotSwitchResponse::Ack => Ok(()),
         SlotSwitchResponse::Nack { err } => bail!("SLOT_SWITCH NACKed, err=0x{err:02x}"),
+    }
+}
+
+/// Live device telemetry gathered over one connection: the CMD_READ_MSD
+/// (0x0044) buffer -- the same 16 bytes the device broadcasts as
+/// manufacturer-specific advertising data, hence "MSD" -- plus the firmware
+/// version (CMD_FIRMWARE_VERSION, 0x43). Field layout per the firmware's
+/// `updatemsdata()` (display_service.cpp) and tools/od-device-cli.py's
+/// `decode_msd_payload`.
+#[derive(Debug, Clone)]
+pub struct Telemetry {
+    /// Battery voltage in millivolts. `None` when the device reports raw 0 --
+    /// battery sense unconfigured or not yet sampled, never a real 0mV.
+    pub battery_mv: Option<u16>,
+    pub temperature_c: f32,
+    /// "v<major>.<minor>.<patch> <short-sha>" per the 0x43 response (patch
+    /// byte optional on older firmware, treated as 0).
+    pub firmware: String,
+}
+
+/// Reads firmware version (0x43) then live MSD telemetry (0x44) over the
+/// already-connected `peripheral` -- one subscribe covers both commands.
+/// Does NOT disconnect; the caller owns the connection's lifetime.
+///
+/// MSD battery value is 9 bits in 10mV units: bit 0 of the status byte
+/// (payload[15]) is the high bit over payload[14].
+pub async fn read_telemetry(peripheral: &Peripheral) -> Result<Telemetry> {
+    tokio::time::timeout(OP_TIMEOUT, read_telemetry_inner(peripheral))
+        .await
+        .map_err(|_| anyhow!("telemetry read timed out after {OP_TIMEOUT:?}"))?
+}
+
+async fn read_telemetry_inner(peripheral: &Peripheral) -> Result<Telemetry> {
+    let char_uuid = Uuid::parse_str(protocol::SERVICE_CHAR_UUID)?;
+    let ch = find_char(peripheral, char_uuid)?;
+    let mut notifications = peripheral.notifications().await.context("getting notification stream")?;
+    peripheral.subscribe(&ch).await.context("subscribing to notifications")?;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    // --- firmware version (0x43): [0x00][0x43][major][minor][shaLen][sha..][patch?] ---
+    peripheral.write(&ch, &[0x00, 0x43], WriteType::WithResponse).await.context("writing FIRMWARE_VERSION")?;
+    let firmware = wait_for(&mut notifications, |d| {
+        if d.len() >= 5 && d[0] == 0x00 && d[1] == 0x43 {
+            let (major, minor, sha_len) = (d[2], d[3], d[4] as usize);
+            let sha = d.get(5..5 + sha_len).map(|s| String::from_utf8_lossy(s).into_owned()).unwrap_or_default();
+            let patch = d.get(5 + sha_len).copied().unwrap_or(0); // older firmware omits it
+            let mut short_sha: String = sha.chars().take(7).collect();
+            if short_sha.chars().all(|c| c == '0') {
+                short_sha.clear(); // an all-zero SHA is a build placeholder, not information
+            }
+            return Some(if short_sha.is_empty() {
+                format!("v{major}.{minor}.{patch}")
+            } else {
+                format!("v{major}.{minor}.{patch} {short_sha}")
+            });
+        }
+        None
+    })
+    .await?;
+
+    // --- MSD (0x44): [0x00][0x44] + 16 bytes ---
+    peripheral.write(&ch, &[0x00, 0x44], WriteType::WithResponse).await.context("writing READ_MSD")?;
+    enum MsdResp {
+        Data([u8; 16]),
+        Err(u8),
+    }
+    let resp = wait_for(&mut notifications, |d| {
+        if d.len() >= 18 && d[0] == 0x00 && d[1] == 0x44 {
+            let mut buf = [0u8; 16];
+            buf.copy_from_slice(&d[2..18]);
+            return Some(MsdResp::Data(buf));
+        }
+        // Short [0x00][0x44][0xFE|0xFF] = firmware-reported read error;
+        // [0xFE][0x44] = auth required (security enabled, no session).
+        if d.len() == 3 && d[0] == 0x00 && d[1] == 0x44 {
+            return Some(MsdResp::Err(d[2]));
+        }
+        if d.len() >= 2 && d[0] == 0xFE && d[1] == 0x44 {
+            return Some(MsdResp::Err(0xFE));
+        }
+        None
+    })
+    .await?;
+
+    match resp {
+        MsdResp::Data(payload) => {
+            let status = payload[15];
+            let raw_10mv = (((status & 0x01) as u16) << 8) | payload[14] as u16;
+            Ok(Telemetry {
+                battery_mv: if raw_10mv > 0 { Some(raw_10mv * 10) } else { None },
+                temperature_c: (payload[13] as f32 / 2.0) - 40.0,
+                firmware,
+            })
+        }
+        MsdResp::Err(code) => bail!("READ_MSD failed, code=0x{code:02x}"),
     }
 }
 

@@ -1,4 +1,4 @@
-//! Weather page (slot 2): all-day rain probability by hour, plus temperature.
+//! Weather page (slot 3): all-day rain probability by hour, plus temperature.
 //! Deliberately plain -- a bar per hour, a number every few hours, no fancy
 //! graphics. Humidity and surface pressure are already fetched (see
 //! `crate::weather::Hourly`) if a future revision wants to show them too.
@@ -14,7 +14,7 @@ use crate::plugin::{self, Plugin};
 use crate::render::{self, text_width, truncate_to_width, Fonts, BLACK, DARK_GRAY, H, LIGHT_GRAY, W, WHITE};
 use crate::weather::{self, Forecast};
 
-pub const SLOT: u8 = 2;
+pub const SLOT: u8 = 3;
 const NAME: &str = "Egham Weather";
 const STATUS_LABEL: &str = "ALL-DAY RAIN FORECAST";
 

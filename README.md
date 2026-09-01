@@ -35,11 +35,12 @@ Three layers, each only aware of the one below it:
 | Plugin | Slot | Source | Status label |
 |---|---|---|---|
 | `plugins::index` | 0 | built from every other plugin's `(slot, name)` | `PRESS KEY1 / KEY2 TO BROWSE` |
-| `plugins::trains` | 1 | Gavin's own self-hosted `traintimes` service (Darwin via Kafka) | `TRAINTIMES LIVE` |
-| `plugins::weather` | 2 | [Open-Meteo](https://open-meteo.com/) | `ALL-DAY RAIN FORECAST` |
-| `plugins::calendar_default` | 3 | Google Calendar (today + tomorrow, agenda) | `GOOGLE CALENDAR` |
-| `plugins::calendar_week` | 4 | Google Calendar (7-day grid) | `7-DAY CALENDAR` |
-| `plugins::air_quality` | 5 | Open-Meteo Air Quality (AQI/UV + pollen) | `AIR QUALITY & POLLEN` |
+| `plugins::battery` | 1 | the panel itself (CMD_READ_MSD over BLE, hourly) | `PANEL BATTERY MONITOR` |
+| `plugins::trains` | 2 | Gavin's own self-hosted `traintimes` service (Darwin via Kafka) | `TRAINTIMES LIVE` |
+| `plugins::weather` | 3 | [Open-Meteo](https://open-meteo.com/) | `ALL-DAY RAIN FORECAST` |
+| `plugins::calendar_default` | 4 | Google Calendar (today + tomorrow, agenda) | `GOOGLE CALENDAR` |
+| `plugins::calendar_week` | 5 | Google Calendar (7-day grid) | `7-DAY CALENDAR` |
+| `plugins::air_quality` | 6 | Open-Meteo Air Quality (AQI/UV + pollen) | `AIR QUALITY & POLLEN` |
 
 The index is itself a `Plugin`, not a special case — it's built from
 `plugins.iter().map(|p| (p.slot(), p.name()))` in `main.rs`, so it can never

@@ -1,4 +1,4 @@
-//! Air quality & pollen page (slot 5): the second half of the weather pair
+//! Air quality & pollen page (slot 6): the second half of the weather pair
 //! (see `plugins::weather`) -- current air quality and UV as a one-line
 //! summary (which also names whichever pollen peaks highest today and its
 //! risk category, so that's answered before anyone has to go read the
@@ -19,7 +19,7 @@ use crate::chart::{self, LineStyle, Marker, Series};
 use crate::plugin::{self, Plugin};
 use crate::render::{self, text_width, Fonts, BLACK, DARK_GRAY, H, W, WHITE};
 
-pub const SLOT: u8 = 5;
+pub const SLOT: u8 = 6;
 const NAME: &str = "Egham Air Quality";
 const STATUS_LABEL: &str = "AIR QUALITY & POLLEN";
 

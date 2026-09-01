@@ -1,4 +1,4 @@
-//! Calendar page (slot 3): today's and tomorrow's events, agenda-style --
+//! Calendar page (slot 4): today's and tomorrow's events, agenda-style --
 //! the "Default" layout from TRMNL's Google Calendar recipe, not the 7-day
 //! grid (see `plugins::calendar_week` for that).
 
@@ -12,7 +12,7 @@ use crate::calendar::{self, Event};
 use crate::plugin::{self, Plugin};
 use crate::render::{self, truncate_to_width, Fonts, BLACK, DARK_GRAY, H, LIGHT_GRAY, W, WHITE};
 
-pub const SLOT: u8 = 3;
+pub const SLOT: u8 = 4;
 const NAME: &str = "Egham Calendar";
 const STATUS_LABEL: &str = "GOOGLE CALENDAR";
 const DAYS_AHEAD: i64 = 2;

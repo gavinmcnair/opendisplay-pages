@@ -1,4 +1,4 @@
-//! Trains page (slot 1): the two Egham journeys actually being caught, one
+//! Trains page (slot 2): the two Egham journeys actually being caught, one
 //! per physical platform -- Platform 1 (east): Waterloo via Richmond;
 //! Platform 2 (west): the Chertsey branch (Weybridge direction). This is a
 //! DELIBERATELY narrowed board, not "all departures": Waterloo services
@@ -39,7 +39,7 @@ use crate::plugin::{self, Plugin};
 use crate::render::{self, text_width, truncate_to_width, Fonts, BLACK, DARK_GRAY, H, LIGHT_GRAY, W, WHITE};
 use crate::traintimes::{self, StationCall};
 
-pub const SLOT: u8 = 1;
+pub const SLOT: u8 = 2;
 const NAME: &str = "Egham Train Times";
 const STATUS_LABEL: &str = "TRAINTIMES LIVE";
 

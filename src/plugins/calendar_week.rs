@@ -1,4 +1,4 @@
-//! Calendar page (slot 4): a 7-day grid, one column per day -- TRMNL's
+//! Calendar page (slot 5): a 7-day grid, one column per day -- TRMNL's
 //! "Week" layout. Compact by necessity (7 columns across 800px leaves
 //! ~107px each): a day header, then that day's events stacked as
 //! time + truncated title, no time-axis grid (see module doc in
@@ -15,7 +15,7 @@ use crate::calendar::{self, Event};
 use crate::plugin::{self, Plugin};
 use crate::render::{self, truncate_to_width, Fonts, BLACK, DARK_GRAY, H, LIGHT_GRAY, W, WHITE};
 
-pub const SLOT: u8 = 4;
+pub const SLOT: u8 = 5;
 const NAME: &str = "Egham Week Ahead";
 const STATUS_LABEL: &str = "7-DAY CALENDAR";
 const DAYS_AHEAD: i64 = 7;

@@ -3,3 +3,4 @@ egham_state*.txt
 calendar_token.txt
 poll.log
 *.png
+battery_history.txt

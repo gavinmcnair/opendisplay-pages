@@ -15,6 +15,7 @@ mod weather;
 use anyhow::{Context, Result};
 use plugin::Plugin;
 use plugins::air_quality::AirQualityPlugin;
+use plugins::battery::BatteryPlugin;
 use plugins::calendar_default::CalendarDefaultPlugin;
 use plugins::calendar_week::CalendarWeekPlugin;
 use plugins::index::IndexPlugin;
@@ -23,7 +24,7 @@ use plugins::weather::WeatherPlugin;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-const DEVICE_NAME: &str = "ODC48BB0";
+use ble::DEVICE_NAME;
 
 // Ceiling on how long the loop sleeps between passes -- the schedule's
 // boundaries (e.g. 07:00, 08:30) are checked at least this often. It is NOT
@@ -81,6 +82,7 @@ async fn main() -> Result<()> {
     // nothing below this needs to change, including every --render-able
     // escape hatch, since all of them go through the Plugin trait generically.
     let mut plugins: Vec<Box<dyn Plugin>> = vec![
+        Box::new(BatteryPlugin::new()),
         Box::new(TrainsPlugin::new()),
         Box::new(WeatherPlugin),
         Box::new(CalendarDefaultPlugin),
