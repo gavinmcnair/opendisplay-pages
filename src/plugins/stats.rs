@@ -74,10 +74,10 @@ struct Sample {
 /// Live system facts shown in the strip above the status bar -- captured on
 /// the same hourly connection as the battery sample, cached on the plugin so
 /// a tick that skips the BLE read (MIN_SAMPLE_GAP) still renders the last
-/// known values. Deliberately NOT part of the fingerprint: advertising RSSI
-/// jitters constantly, and repushing pixel-noise to e-ink for it would defeat
-/// the whole change-detection scheme -- the strip refreshes anyway whenever
-/// a new battery sample repushes the page.
+/// known values. Fingerprinted only in stable form (firmware string + bars
+/// bucket, see `fingerprint_page`): the raw dBm jitters by a few dB between
+/// scans, and repushing pixel-noise to e-ink for it would defeat the whole
+/// change-detection scheme.
 struct SysInfo {
     firmware: String,
     rssi_dbm: Option<i16>,
@@ -116,22 +116,31 @@ impl Plugin for StatsPlugin {
 
             let now = Local::now().timestamp();
             let due = history.last().map_or(true, |s| now - s.ts >= MIN_SAMPLE_GAP.as_secs() as i64);
-            if due {
+            // Connect when a history sample is due, and ALSO when this
+            // process has no sys info yet (a restart wiped the in-memory
+            // cache while the last sample was still fresh) -- otherwise the
+            // panel shows "SYSTEM INFO PENDING" for up to an hour after
+            // every restart. A need_sys-only connect deliberately does NOT
+            // append to the history (MIN_SAMPLE_GAP guards the discharge
+            // slope, not the strip).
+            if due || self.sys.is_none() {
                 let (peripheral, rssi) = ble::find_and_connect_with_rssi(ble::DEVICE_NAME).await?;
                 let telemetry = ble::read_telemetry(&peripheral).await;
                 let _ = peripheral.disconnect().await;
                 let telemetry = telemetry?;
-                let mv = telemetry.battery_mv.context(
-                    "device reports no battery reading (raw 0 -- sense unconfigured or not yet sampled)",
-                )?;
-                history.push(Sample { ts: now, mv, temp_c: telemetry.temperature_c });
+                if due {
+                    let mv = telemetry.battery_mv.context(
+                        "device reports no battery reading (raw 0 -- sense unconfigured or not yet sampled)",
+                    )?;
+                    history.push(Sample { ts: now, mv, temp_c: telemetry.temperature_c });
+                }
                 self.sys = Some(SysInfo { firmware: telemetry.firmware, rssi_dbm: rssi });
             }
 
             history.retain(|s| now - s.ts <= WINDOW.as_secs() as i64);
             save_history(&history)?;
 
-            let fingerprint = fingerprint_history(&history);
+            let fingerprint = fingerprint_page(&history, self.sys.as_ref());
             let img = render_page(fonts, &history, self.sys.as_ref());
             Ok((fingerprint, img))
         })
@@ -162,11 +171,20 @@ fn save_history(history: &[Sample]) -> Result<()> {
     std::fs::write(HISTORY_FILE, text).context("writing battery history")
 }
 
-fn fingerprint_history(history: &[Sample]) -> u64 {
+/// History plus the STABLE parts of the sys strip: the firmware string and
+/// the RSSI's bars BUCKET (not the raw dBm, which jitters by a few dB
+/// between scans and would repush pixel-noise). In practice this only adds
+/// one push beyond the hourly sample cadence: the restart-recovery tick
+/// where "SYSTEM INFO PENDING" becomes a populated strip.
+fn fingerprint_page(history: &[Sample], sys: Option<&SysInfo>) -> u64 {
     let mut hasher = DefaultHasher::new();
     for s in history {
         s.ts.hash(&mut hasher);
         s.mv.hash(&mut hasher);
+    }
+    if let Some(sys) = sys {
+        sys.firmware.hash(&mut hasher);
+        sys.rssi_dbm.map(rssi_bars).hash(&mut hasher);
     }
     hasher.finish()
 }
@@ -299,19 +317,25 @@ fn draw_sys_strip(img: &mut GrayImage, fonts: &Fonts, sys: Option<&SysInfo>) {
     }
 }
 
-/// Four ascending bars, wifi-icon style. Filled count by RSSI: the
-/// thresholds are the usual BLE rules of thumb (>= -60 excellent, -70 good,
-/// -80 workable, -90 marginal, below that basically out of range). Unfilled
-/// bars still render in light gray so "2 of 4" reads as a fraction, not
-/// just two floating dashes.
-fn draw_signal_bars(img: &mut GrayImage, x: f32, baseline_y: f32, dbm: i16) {
-    let filled = match dbm {
+/// Filled-bar count for an RSSI, 0-4 -- the usual BLE rules of thumb
+/// (>= -60 excellent, -70 good, -80 workable, -90 marginal, below that
+/// basically out of range). Shared by the drawing below and
+/// `fingerprint_page` (which hashes this bucket, not the jittery raw dBm).
+fn rssi_bars(dbm: i16) -> i32 {
+    match dbm {
         d if d >= -60 => 4,
         d if d >= -70 => 3,
         d if d >= -80 => 2,
         d if d >= -90 => 1,
         _ => 0,
-    };
+    }
+}
+
+/// Four ascending bars, wifi-icon style. Unfilled bars still render in
+/// light gray so "2 of 4" reads as a fraction, not just two floating
+/// dashes.
+fn draw_signal_bars(img: &mut GrayImage, x: f32, baseline_y: f32, dbm: i16) {
+    let filled = rssi_bars(dbm);
     let bar_w = 4.0;
     let gap = 2.0;
     for i in 0..4u32 {
