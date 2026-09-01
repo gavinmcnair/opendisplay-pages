@@ -35,7 +35,7 @@ Three layers, each only aware of the one below it:
 | Plugin | Slot | Source | Status label |
 |---|---|---|---|
 | `plugins::index` | 0 | built from every other plugin's `(slot, name)` | `PRESS KEY1 / KEY2 TO BROWSE` |
-| `plugins::trains` | 1 | [Realtime Trains](https://api.rtt.io/) | `REALTIME TRAINS` |
+| `plugins::trains` | 1 | Gavin's own self-hosted `traintimes` service (Darwin via Kafka) | `TRAINTIMES LIVE` |
 | `plugins::weather` | 2 | [Open-Meteo](https://open-meteo.com/) | `ALL-DAY RAIN FORECAST` |
 | `plugins::calendar_default` | 3 | Google Calendar (today + tomorrow, agenda) | `GOOGLE CALENDAR` |
 | `plugins::calendar_week` | 4 | Google Calendar (7-day grid) | `7-DAY CALENDAR` |
@@ -92,8 +92,8 @@ egham_ble --compress-test             # zlib ratio on synthetic patterns + the f
 
 Per-slot change detection lives in `egham_state_slot<N>.txt` next to the
 binary (gitignored) — a page is only re-pushed to the device when its content
-fingerprint actually changes, so e.g. the trains page's 5-minute poll doesn't
-re-transfer an unchanged board.
+fingerprint actually changes, so e.g. the trains page's 10-second poll (see
+`plugins::trains`) doesn't re-transfer an unchanged board.
 
 ## Google Calendar setup
 
@@ -145,5 +145,7 @@ from its own env vars inside the plugin (see `calendar.rs`'s
 the orchestrator. If it needs one-time interactive setup before it can
 render, override `Plugin::setup()` (see `CalendarDefaultPlugin::setup`) —
 that's what `--setup <name>` calls. If it needs to look fresher than the
-default 5-minute poll without hammering its API, override
-`Plugin::poll_interval()` and cache internally (see `plugins::trains`).
+default 5-minute poll, override `Plugin::poll_interval()` — fetch on every
+tick if the source has no rate limit worth respecting (see `plugins::trains`,
+which polls its own self-hosted service every 10s), or cache internally
+between fetches if it does.

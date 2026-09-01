@@ -49,7 +49,7 @@ struct TokenResponse {
 /// flow Google removed for new OAuth clients), exchanges the code for a
 /// refresh token, and saves it. Run once per machine; the refresh token
 /// outlives individual access tokens (which `fetch_events` mints fresh every
-/// call, same pattern as `rtt::mint_access_token`).
+/// call).
 pub fn run_oauth_flow() -> Result<()> {
     let client_id = client_id()?;
     let client_secret = client_secret()?;

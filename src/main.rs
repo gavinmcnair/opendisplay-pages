@@ -7,9 +7,9 @@ mod plugin;
 mod plugins;
 mod protocol;
 mod render;
-mod rtt;
 mod scheduler;
 mod state;
+mod traintimes;
 mod weather;
 
 use anyhow::{Context, Result};

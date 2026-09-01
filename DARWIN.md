@@ -1,5 +1,14 @@
 # Darwin Push Port — notes for later
 
+> **Superseded, 2026-08-30: see `kafka.md`.** This file's registration section
+> (opendata.nationalrail.co.uk) and transport assumption (STOMP/ActiveMQ) are
+> both out of date. The feed moved to raildata.org.uk (Rail Data Marketplace)
+> and is accessed via **Kafka** (Confluent Cloud), not STOMP — confirmed
+> against the real broker with real live data. `kafka.md` has the verified
+> connection details, topic names, and message shape; the "what it is" /
+> "what building this would involve" sections below are still a reasonable
+> description of the underlying Darwin data itself, just not of how to reach it.
+
 Why this file exists: our current `rtt.rs` fetches from `data.rtt.io`, which is a
 polled REST API only — no webhook/streaming option. Polling any interval short
 enough to feel "live" (e.g. every 60s) blows through RTT's rate limits if run

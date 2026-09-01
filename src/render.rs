@@ -95,17 +95,6 @@ pub fn truncate_to_width(font: &Font, size: f32, text: &str, max_w: f32) -> Stri
     s
 }
 
-/// Extracts "HH:MM" from an RTT-style ISO-ish timestamp ("...T14:32:00...").
-/// Not a general-purpose date formatter -- just what this project's data
-/// sources happen to hand back.
-pub fn hhmm(iso: &str) -> &str {
-    if iso.len() >= 16 {
-        &iso[11..16]
-    } else {
-        iso
-    }
-}
-
 /// Current wall-clock time as "HH:MM UTC", dependency-free. For a plugin
 /// with no natural "as of" timestamp of its own to show in its status bar
 /// (e.g. the index, or weather where the forecast's own hour-0 entry is
