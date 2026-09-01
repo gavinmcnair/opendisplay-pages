@@ -88,28 +88,37 @@ pub struct Scheduler {
     /// non-overlapping in practice -- this doesn't detect or warn about
     /// overlap, it just takes the first match.
     pub rules: Vec<ScheduleRule>,
+    /// Where the panel returns when a rule's window ENDS -- forced exactly
+    /// once at that transition, never continuously. Outside those two
+    /// transition moments (window entry -> rule slot, window exit -> this)
+    /// the schedule makes no claim on the panel at all: the buttons own it,
+    /// and a process restart outside a window forces nothing. An earlier
+    /// design treated this as "the slot that should be showing whenever no
+    /// rule matches" and re-forced it on every restart -- which yanked the
+    /// display away from wherever the user had browsed to, for no one's
+    /// benefit.
     pub default_slot: u8,
     pub default_label: &'static str,
 }
 
 impl Scheduler {
-    /// The slot that should be on screen right now, and its label.
-    pub fn active(&self, now: DateTime<Local>) -> (u8, &'static str) {
-        for rule in &self.rules {
-            if rule.matches(now) {
-                return (rule.slot, rule.label);
-            }
-        }
-        (self.default_slot, self.default_label)
+    /// The slot an active RULE says should be on screen right now, with its
+    /// label -- `None` when no rule's window is active. The caller detects
+    /// transitions (`None`->`Some` = window began, `Some`->`None` = window
+    /// ended, switch to `default_slot`) rather than this answering "what
+    /// should be on screen" unconditionally -- see `default_slot`'s doc.
+    pub fn active(&self, now: DateTime<Local>) -> Option<(u8, &'static str)> {
+        self.rules.iter().find(|rule| rule.matches(now)).map(|rule| (rule.slot, rule.label))
     }
 
-    pub fn active_now(&self) -> (u8, &'static str) {
+    pub fn active_now(&self) -> Option<(u8, &'static str)> {
         self.active(Local::now())
     }
 }
 
 /// This deployment's schedule: trains during the Mon-Fri morning commute
-/// window, weather the rest of the time.
+/// window, returning to weather when that window ends; no other claim on
+/// the panel.
 pub fn default_schedule() -> Scheduler {
     Scheduler {
         rules: vec![ScheduleRule {

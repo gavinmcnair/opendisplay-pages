@@ -164,11 +164,16 @@ async fn main() -> Result<()> {
     let mut last_fingerprints: Vec<Option<u64>> =
         plugins.iter().map(|p| state::load(&state_path_for_slot(p.slot()))).collect();
 
-    // What we last told the device to display via CMD_SLOT_SWITCH -- None
-    // means "unknown" (just started), which always forces one switch on the
-    // first tick so a restarted process re-syncs the panel to the schedule
-    // rather than trusting whatever it happened to be showing before.
-    let mut last_forced_slot: Option<u8> = None;
+    // The schedule-rule slot acknowledged as of the previous tick -- the
+    // switch logic below acts only on TRANSITIONS of this value (window
+    // entry forces the rule's slot, window exit forces the default slot,
+    // each exactly once; see Scheduler::default_slot's doc). Starts None, so
+    // a restart mid-window still forces the rule's slot once (the schedule's
+    // intent is honored across a crash), while a restart outside any window
+    // forces nothing and the panel stays where its buttons left it. Only
+    // advanced past a transition once the forced switch actually succeeds,
+    // so a BLE failure retries next tick instead of losing the transition.
+    let mut acked_rule_slot: Option<u8> = None;
 
     // Per-plugin, not one shared gate: each plugin's own `poll_interval()`
     // decides how often the orchestrator even calls its `render()` (see that
@@ -213,27 +218,30 @@ async fn main() -> Result<()> {
         }
 
         // A flagged plugin's fresh content wins this tick outright -- see
-        // Plugin::autoswitch_on_change's doc comment. Otherwise the
-        // time-based schedule decides, and only forces a switch when its
-        // answer actually differs from what's already on screen.
+        // Plugin::autoswitch_on_change's doc comment. Otherwise the schedule
+        // acts on window TRANSITIONS only (see acked_rule_slot's comment):
+        // entering a rule's window forces that slot, leaving it forces the
+        // default slot, and in between the buttons own the panel.
+        let rule_now = scheduler.active_now();
         let target = if let Some(slot) = autoswitch_target {
             Some((slot, "ALERT"))
         } else {
-            let (slot, label) = scheduler.active_now();
-            if last_forced_slot == Some(slot) {
-                None
-            } else {
-                Some((slot, label))
+            match (acked_rule_slot, rule_now) {
+                (prev, Some((slot, label))) if prev != Some(slot) => Some((slot, label)),
+                (Some(_), None) => Some((scheduler.default_slot, scheduler.default_label)),
+                _ => None,
             }
         };
-        if let Some((slot, label)) = target {
-            match force_switch(slot).await {
+        match target {
+            Some((slot, label)) => match force_switch(slot).await {
                 Ok(()) => {
                     eprintln!("Switched {DEVICE_NAME} to slot {slot} ({label}).");
-                    last_forced_slot = Some(slot);
+                    acked_rule_slot = rule_now.map(|(s, _)| s);
                 }
                 Err(e) => eprintln!("Slot switch to {slot} ({label}) failed: {e:#}"),
-            }
+            },
+            // No transition pending -- keep tracking the (unchanged) state.
+            None => acked_rule_slot = rule_now.map(|(s, _)| s),
         }
 
         if once {
