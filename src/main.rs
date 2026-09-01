@@ -281,6 +281,7 @@ async fn tick_plugin(
     let peripheral = ble::find_and_connect(DEVICE_NAME).await?;
     ble::upload_pipe_write_to_slot(&peripheral, plugin.slot(), &packed).await?;
 
+    state::record_push();
     state::save(&state_path_for_slot(plugin.slot()), fingerprint)?;
     *last_fingerprint = Some(fingerprint);
     Ok(true)
@@ -294,5 +295,6 @@ async fn push_index(fonts: &render::Fonts, index: &mut IndexPlugin) -> Result<()
     let packed = render::pack_gray4_planes(&img);
     let peripheral = ble::find_and_connect(DEVICE_NAME).await?;
     ble::upload_pipe_write_to_slot(&peripheral, index.slot(), &packed).await?;
+    state::record_push();
     Ok(())
 }

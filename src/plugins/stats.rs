@@ -85,11 +85,17 @@ struct SysInfo {
 
 pub struct StatsPlugin {
     sys: Option<SysInfo>,
+    /// Poller process start (the plugin is constructed at process start) --
+    /// the strip's UP value. Painted at push time and deliberately NOT
+    /// fingerprinted (see fingerprint_page), it works as a dead-man
+    /// indicator: if the poller dies, UP and LAST PUSH freeze on the panel,
+    /// and their distance from the wall clock says the service is down.
+    started: std::time::Instant,
 }
 
 impl StatsPlugin {
     pub fn new() -> Self {
-        Self { sys: None }
+        Self { sys: None, started: std::time::Instant::now() }
     }
 }
 
@@ -141,7 +147,7 @@ impl Plugin for StatsPlugin {
             save_history(&history)?;
 
             let fingerprint = fingerprint_page(&history, self.sys.as_ref());
-            let img = render_page(fonts, &history, self.sys.as_ref());
+            let img = render_page(fonts, &history, self.sys.as_ref(), self.started.elapsed());
             Ok((fingerprint, img))
         })
     }
@@ -228,7 +234,7 @@ fn estimate_eta(history: &[Sample]) -> Option<Eta> {
     Some(Eta::DaysLeft((current_soc / -slope_per_hour) / 24.0))
 }
 
-fn render_page(fonts: &Fonts, history: &[Sample], sys: Option<&SysInfo>) -> GrayImage {
+fn render_page(fonts: &Fonts, history: &[Sample], sys: Option<&SysInfo>, uptime: Duration) -> GrayImage {
     let mut img = GrayImage::from_pixel(W, H, Luma([WHITE]));
 
     render::draw_text(&mut img, &fonts.sans_bold, 13.0, 26.0, 22.0 + 13.0, "EGHAM DISPLAY", DARK_GRAY);
@@ -273,7 +279,7 @@ fn render_page(fonts: &Fonts, history: &[Sample], sys: Option<&SysInfo>) -> Gray
     draw_line_segment_mut(&mut img, (0.0, 120.0), (W as f32, 120.0), Luma([BLACK]));
 
     draw_soc_chart(&mut img, fonts, history);
-    draw_sys_strip(&mut img, fonts, sys);
+    draw_sys_strip(&mut img, fonts, sys, uptime);
 
     plugin::draw_status_bar(&mut img, fonts, SLOT, &render::current_time_utc_hhmm(), STATUS_LABEL);
     img
@@ -287,18 +293,43 @@ fn render_page(fonts: &Fonts, history: &[Sample], sys: Option<&SysInfo>) -> Gray
 const HARDWARE_LABEL: &str = "SEEED XIAO ESP32-S3";
 const POWER_LABEL: &str = "BATTERY POWER";
 
-/// System line above the status bar: firmware version and hardware on the
-/// left, BLE signal strength (wifi-style bars + dBm) on the right -- the
-/// bars answer "is the link getting marginal" at a glance, the dBm number
-/// is there for actually comparing positions.
-fn draw_sys_strip(img: &mut GrayImage, fonts: &Fonts, sys: Option<&SysInfo>) {
+/// "3D 4H" / "5H 12M" / "42M" -- two units max; nobody reads seconds off a
+/// once-an-hour e-ink strip.
+fn format_uptime(uptime: Duration) -> String {
+    let mins = uptime.as_secs() / 60;
+    let (d, h, m) = (mins / (24 * 60), (mins / 60) % 24, mins % 60);
+    if d > 0 {
+        format!("{d}D {h}H")
+    } else if h > 0 {
+        format!("{h}H {m}M")
+    } else {
+        format!("{m}M")
+    }
+}
+
+/// System line above the status bar: firmware version, hardware, poller
+/// uptime, and when anything was last pushed to the panel on the left; BLE
+/// signal strength (wifi-style bars + dBm) on the right. UP and LAST PUSH
+/// are painted at push time and freeze if the poller dies -- their distance
+/// from the wall clock IS the "has the service stopped working" answer this
+/// page exists to give. The page itself still repushes only hourly (these
+/// values are not fingerprinted); they ride along on the sample cadence.
+fn draw_sys_strip(img: &mut GrayImage, fonts: &Fonts, sys: Option<&SysInfo>, uptime: Duration) {
     let y = 436.0; // text baseline, just above the status bar's rules at 448
     let Some(sys) = sys else {
         render::draw_text(img, &fonts.sans_bold, 13.0, 26.0, y, "SYSTEM INFO PENDING NEXT READING", LIGHT_GRAY);
         return;
     };
 
-    let left = format!("FW {}  \u{b7}  {HARDWARE_LABEL}  \u{b7}  {POWER_LABEL}", sys.firmware);
+    let last_push = crate::state::load_last_push()
+        .and_then(|ts| chrono::Local.timestamp_opt(ts, 0).single())
+        .map(|t| format!("  \u{b7}  LAST PUSH {}", t.format("%H:%M")))
+        .unwrap_or_default();
+    let left = format!(
+        "FW {}  \u{b7}  {HARDWARE_LABEL}  \u{b7}  {POWER_LABEL}  \u{b7}  UP {}{last_push}",
+        sys.firmware,
+        format_uptime(uptime)
+    );
     render::draw_text(img, &fonts.sans_bold, 13.0, 26.0, y, &left, DARK_GRAY);
 
     match sys.rssi_dbm {
