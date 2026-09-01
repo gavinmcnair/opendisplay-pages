@@ -77,8 +77,8 @@ fn fingerprint_registry(registry: &[(u8, &'static str)], updated_at: &str) -> u6
 fn render_page(fonts: &Fonts, registry: &[(u8, &'static str)], updated_at: &str, scheduler: &Scheduler) -> GrayImage {
     let mut img = GrayImage::from_pixel(W, H, Luma([WHITE]));
 
-    render::draw_text(&mut img, &fonts.arial_bold, 13.0, 26.0, 22.0 + 13.0, "EGHAM DISPLAY", DARK_GRAY);
-    render::draw_text(&mut img, &fonts.arial_black, 46.0, 26.0, 36.0 + 46.0, "INDEX", BLACK);
+    render::draw_text(&mut img, &fonts.sans_bold, 13.0, 26.0, 22.0 + 13.0, "EGHAM DISPLAY", DARK_GRAY);
+    render::draw_text(&mut img, &fonts.sans_black, 46.0, 26.0, 36.0 + 46.0, "INDEX", BLACK);
 
     draw_line_segment_mut(&mut img, (0.0, 100.0), (W as f32, 100.0), Luma([BLACK]));
     draw_line_segment_mut(&mut img, (0.0, 101.0), (W as f32, 101.0), Luma([BLACK]));
@@ -96,14 +96,14 @@ fn render_page(fonts: &Fonts, registry: &[(u8, &'static str)], updated_at: &str,
         }
         let label = format!("SLOT {slot_id}");
         render::draw_text(&mut img, &fonts.mono, 15.0, 26.0, ry + 27.0, &label, DARK_GRAY);
-        render::draw_text(&mut img, &fonts.arial_bold, 19.0, 150.0, ry + 28.0, name, BLACK);
+        render::draw_text(&mut img, &fonts.sans_bold, 19.0, 150.0, ry + 28.0, name, BLACK);
 
         // Schedule info folded into the same row, gray, right-aligned --
         // rather than a separate section repeating each plugin's name a
         // second time. Blank for a plugin the scheduler never mentions.
         if let Some(schedule_text) = schedule_text_for(scheduler, *slot_id) {
-            let tw = render::text_width(&fonts.arial_bold, 14.0, &schedule_text);
-            render::draw_text(&mut img, &fonts.arial_bold, 14.0, W as f32 - 26.0 - tw, ry + 28.0, &schedule_text, LIGHT_GRAY);
+            let tw = render::text_width(&fonts.sans_bold, 14.0, &schedule_text);
+            render::draw_text(&mut img, &fonts.sans_bold, 14.0, W as f32 - 26.0 - tw, ry + 28.0, &schedule_text, LIGHT_GRAY);
         }
     }
 

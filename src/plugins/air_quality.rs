@@ -101,8 +101,8 @@ fn dominant_pollen(hourly: &Hourly) -> Option<(&'static str, f32)> {
 fn render_page(fonts: &Fonts, forecast: &Forecast) -> GrayImage {
     let mut img = GrayImage::from_pixel(W, H, Luma([WHITE]));
 
-    render::draw_text(&mut img, &fonts.arial_bold, 13.0, 26.0, 22.0 + 13.0, "EGHAM AIR QUALITY", DARK_GRAY);
-    render::draw_text(&mut img, &fonts.arial_black, 40.0, 26.0, 76.0, "AIR & POLLEN", BLACK);
+    render::draw_text(&mut img, &fonts.sans_bold, 13.0, 26.0, 22.0 + 13.0, "EGHAM AIR QUALITY", DARK_GRAY);
+    render::draw_text(&mut img, &fonts.sans_black, 40.0, 26.0, 76.0, "AIR & POLLEN", BLACK);
 
     let pollen_note = dominant_pollen(&forecast.hourly)
         .map(|(name, peak)| format!("  \u{b7}  {name} POLLEN {}", pollen_category(peak)))
@@ -115,7 +115,7 @@ fn render_page(fonts: &Fonts, forecast: &Forecast) -> GrayImage {
         uv_category(forecast.current.uv_index),
         pollen_note
     );
-    render::draw_text(&mut img, &fonts.arial_bold, 15.0, 26.0, 98.0, &summary, DARK_GRAY);
+    render::draw_text(&mut img, &fonts.sans_bold, 15.0, 26.0, 98.0, &summary, DARK_GRAY);
 
     draw_line_segment_mut(&mut img, (0.0, 118.0), (W as f32, 118.0), Luma([BLACK]));
     draw_line_segment_mut(&mut img, (0.0, 119.0), (W as f32, 119.0), Luma([BLACK]));

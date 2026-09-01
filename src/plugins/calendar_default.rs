@@ -50,8 +50,8 @@ impl Plugin for CalendarDefaultPlugin {
 fn render_page(fonts: &Fonts, events: &[Event]) -> GrayImage {
     let mut img = GrayImage::from_pixel(W, H, Luma([WHITE]));
 
-    render::draw_text(&mut img, &fonts.arial_bold, 13.0, 26.0, 22.0 + 13.0, "GOOGLE CALENDAR", DARK_GRAY);
-    render::draw_text(&mut img, &fonts.arial_black, 40.0, 26.0, 76.0, "AGENDA", BLACK);
+    render::draw_text(&mut img, &fonts.sans_bold, 13.0, 26.0, 22.0 + 13.0, "GOOGLE CALENDAR", DARK_GRAY);
+    render::draw_text(&mut img, &fonts.sans_black, 40.0, 26.0, 76.0, "AGENDA", BLACK);
 
     draw_line_segment_mut(&mut img, (0.0, 100.0), (W as f32, 100.0), Luma([BLACK]));
     draw_line_segment_mut(&mut img, (0.0, 101.0), (W as f32, 101.0), Luma([BLACK]));
@@ -80,11 +80,11 @@ const GROUP_GAP: f32 = 50.0;
 /// position the *next* group's header should start at (so callers can stack
 /// groups without hardcoding each group's height).
 fn draw_day_group(img: &mut GrayImage, fonts: &Fonts, label: &str, events: &[&Event], y0: f32) -> f32 {
-    render::draw_text(img, &fonts.arial_black, 20.0, 26.0, y0, label, BLACK);
+    render::draw_text(img, &fonts.sans_black, 20.0, 26.0, y0, label, BLACK);
     draw_line_segment_mut(img, (26.0, y0 + 8.0), (W as f32 - 26.0, y0 + 8.0), Luma([LIGHT_GRAY]));
 
     if events.is_empty() {
-        render::draw_text(img, &fonts.arial_bold, 15.0, 26.0, y0 + 34.0, "No events", LIGHT_GRAY);
+        render::draw_text(img, &fonts.sans_bold, 15.0, 26.0, y0 + 34.0, "No events", LIGHT_GRAY);
         return y0 + 34.0 + GROUP_GAP;
     }
 
@@ -96,8 +96,8 @@ fn draw_day_group(img: &mut GrayImage, fonts: &Fonts, label: &str, events: &[&Ev
 
         let title = if event.summary.is_empty() { "(untitled)" } else { &event.summary };
         let title_x = 130.0;
-        let title = truncate_to_width(&fonts.arial_bold, 16.0, title, W as f32 - 26.0 - title_x);
-        render::draw_text(img, &fonts.arial_bold, 16.0, title_x, y, &title, BLACK);
+        let title = truncate_to_width(&fonts.sans_bold, 16.0, title, W as f32 - 26.0 - title_x);
+        render::draw_text(img, &fonts.sans_bold, 16.0, title_x, y, &title, BLACK);
 
         y += row_h;
     }

@@ -94,13 +94,13 @@ pub fn draw_status_bar(img: &mut GrayImage, fonts: &Fonts, slot: u8, updated_at:
     render::draw_text(img, &fonts.mono, 13.0, 26.0, 460.0 + 13.0, &updated, DARK_GRAY);
 
     if !status_label.is_empty() {
-        let label_w = render::text_width(&fonts.arial_bold, 13.0, status_label);
-        render::draw_text(img, &fonts.arial_bold, 13.0, (W as f32 - label_w) / 2.0, 460.0 + 13.0, status_label, DARK_GRAY);
+        let label_w = render::text_width(&fonts.sans_bold, 13.0, status_label);
+        render::draw_text(img, &fonts.sans_bold, 13.0, (W as f32 - label_w) / 2.0, 460.0 + 13.0, status_label, DARK_GRAY);
     }
 
     let slot_text = format!("SLOT {slot}");
-    let sw = render::text_width(&fonts.arial_bold, 13.0, &slot_text);
-    render::draw_text(img, &fonts.arial_bold, 13.0, W as f32 - 26.0 - sw, 460.0 + 13.0, &slot_text, DARK_GRAY);
+    let sw = render::text_width(&fonts.sans_bold, 13.0, &slot_text);
+    render::draw_text(img, &fonts.sans_bold, 13.0, W as f32 - 26.0 - sw, 460.0 + 13.0, &slot_text, DARK_GRAY);
 
     render::quantize_to_4gray(img);
 }

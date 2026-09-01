@@ -50,8 +50,8 @@ impl Plugin for CalendarWeekPlugin {
 fn render_page(fonts: &Fonts, events: &[Event]) -> GrayImage {
     let mut img = GrayImage::from_pixel(W, H, Luma([WHITE]));
 
-    render::draw_text(&mut img, &fonts.arial_bold, 13.0, 26.0, 22.0 + 13.0, "GOOGLE CALENDAR", DARK_GRAY);
-    render::draw_text(&mut img, &fonts.arial_black, 40.0, 26.0, 76.0, "WEEK", BLACK);
+    render::draw_text(&mut img, &fonts.sans_bold, 13.0, 26.0, 22.0 + 13.0, "GOOGLE CALENDAR", DARK_GRAY);
+    render::draw_text(&mut img, &fonts.sans_black, 40.0, 26.0, 76.0, "WEEK", BLACK);
 
     draw_line_segment_mut(&mut img, (0.0, 100.0), (W as f32, 100.0), Luma([BLACK]));
     draw_line_segment_mut(&mut img, (0.0, 101.0), (W as f32, 101.0), Luma([BLACK]));
@@ -70,7 +70,7 @@ fn render_page(fonts: &Fonts, events: &[Event]) -> GrayImage {
         let col_x = grid_x0 + day as f32 * col_w;
 
         let day_label = format!("{} {}", date.format("%a").to_string().to_uppercase(), date.format("%-d"));
-        render::draw_text(&mut img, &fonts.arial_bold, 14.0, col_x + 4.0, header_y, &day_label, BLACK);
+        render::draw_text(&mut img, &fonts.sans_bold, 14.0, col_x + 4.0, header_y, &day_label, BLACK);
         draw_line_segment_mut(&mut img, (col_x, header_y + 8.0), (col_x + col_w - 8.0, header_y + 8.0), Luma([LIGHT_GRAY]));
         if day > 0 {
             draw_line_segment_mut(&mut img, (col_x, header_y - 14.0), (col_x, H as f32 - 40.0), Luma([LIGHT_GRAY]));
@@ -83,13 +83,13 @@ fn render_page(fonts: &Fonts, events: &[Event]) -> GrayImage {
             let time_text = event.start.hhmm().unwrap_or("ALL");
             render::draw_text(&mut img, &fonts.mono, 11.0, col_x + 4.0, y, time_text, DARK_GRAY);
             let title = if event.summary.is_empty() { "(untitled)" } else { &event.summary };
-            let title = truncate_to_width(&fonts.arial_bold, 12.0, title, col_w - 8.0);
-            render::draw_text(&mut img, &fonts.arial_bold, 12.0, col_x + 4.0, y + 15.0, &title, BLACK);
+            let title = truncate_to_width(&fonts.sans_bold, 12.0, title, col_w - 8.0);
+            render::draw_text(&mut img, &fonts.sans_bold, 12.0, col_x + 4.0, y + 15.0, &title, BLACK);
             y += row_h;
         }
         if day_events.len() > max_rows {
             let more = format!("+{} more", day_events.len() - max_rows);
-            render::draw_text(&mut img, &fonts.arial_bold, 11.0, col_x + 4.0, y, &more, LIGHT_GRAY);
+            render::draw_text(&mut img, &fonts.sans_bold, 11.0, col_x + 4.0, y, &more, LIGHT_GRAY);
         }
     }
 

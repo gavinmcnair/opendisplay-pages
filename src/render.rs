@@ -23,23 +23,35 @@ pub const LIGHT_GRAY: u8 = 170;
 pub const DARK_GRAY: u8 = 85;
 pub const BLACK: u8 = 0;
 
-fn load_font(path: &str) -> Font {
-    let bytes = std::fs::read(path).unwrap_or_else(|e| panic!("reading font {path}: {e}"));
-    Font::from_bytes(bytes, FontSettings::default()).unwrap_or_else(|e| panic!("parsing font {path}: {e}"))
+/// Fonts are embedded at compile time (`include_bytes!` from `fonts/`, OFL
+/// licenses alongside), not read from system paths at runtime -- the old
+/// macOS `/System/Library/Fonts/...` paths made the binary panic anywhere
+/// else, and this is headed for a Linux Docker container. Both faces are
+/// deliberately screen-first picks for a low-DPI 4-gray panel: Inter (tall
+/// x-height, open apertures, designed for small-size screen legibility)
+/// for labels/headers, JetBrains Mono (slashed zero, unambiguous 1/l/I,
+/// uniform digit widths so a changing time never shifts its neighbors) for
+/// times and the clock.
+fn load_font(bytes: &'static [u8], name: &str) -> Font {
+    Font::from_bytes(bytes, FontSettings::default()).unwrap_or_else(|e| panic!("parsing embedded font {name}: {e}"))
 }
 
 pub struct Fonts {
-    pub arial_bold: Font,
-    pub arial_black: Font,
+    /// Labels and body text (Inter Bold). Field names kept generic-by-role,
+    /// not by family, so a future face swap is a one-line change here.
+    pub sans_bold: Font,
+    /// Large display headers (Inter Black).
+    pub sans_black: Font,
+    /// Times, clocks, anything tabular (JetBrains Mono Bold).
     pub mono: Font,
 }
 
 impl Fonts {
     pub fn load() -> Self {
         Fonts {
-            arial_bold: load_font("/System/Library/Fonts/Supplemental/Arial Bold.ttf"),
-            arial_black: load_font("/System/Library/Fonts/Supplemental/Arial Black.ttf"),
-            mono: load_font("/System/Library/Fonts/Monaco.ttf"),
+            sans_bold: load_font(include_bytes!("../fonts/Inter-Bold.ttf"), "Inter-Bold"),
+            sans_black: load_font(include_bytes!("../fonts/Inter-Black.ttf"), "Inter-Black"),
+            mono: load_font(include_bytes!("../fonts/JetBrainsMono-Bold.ttf"), "JetBrainsMono-Bold"),
         }
     }
 }

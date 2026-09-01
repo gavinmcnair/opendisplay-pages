@@ -152,27 +152,27 @@ fn render_page(fonts: &Fonts, now: DateTime<Local>, east: &[&StationCall], west:
     // change is always showing "today" by construction.
     let clock_text = now.format("%H:%M").to_string();
 
-    render::draw_text(&mut img, &fonts.arial_bold, 13.0, 26.0, 22.0 + 13.0, "SOUTH WESTERN RAILWAY", DARK_GRAY);
-    render::draw_text(&mut img, &fonts.arial_black, 46.0, 26.0, 36.0 + 46.0, "EGHAM", BLACK);
+    render::draw_text(&mut img, &fonts.sans_bold, 13.0, 26.0, 22.0 + 13.0, "SOUTH WESTERN RAILWAY", DARK_GRAY);
+    render::draw_text(&mut img, &fonts.sans_black, 46.0, 26.0, 36.0 + 46.0, "EGHAM", BLACK);
 
     // Fills the header's right side top-to-bottom, PAD_Y from the y=100
     // separator at both top and bottom -- CLOCK_SIZE/BASELINE_Y are
     // calibrated (not derived from font metrics fontdue exposes cleanly) to
     // hit that padding for this specific font+string; re-check with
     // `--render 1` if either constant changes.
-    const CLOCK_SIZE: f32 = 114.0;
-    // 100.0 - 4px target padding, minus a further 3px: this font's digits
-    // render with a few pixels of overshoot below the nominal baseline at
-    // this size (measured, not derived from metrics fontdue exposes
-    // cleanly) -- re-measure with `--render 1` if CLOCK_SIZE changes.
-    const BASELINE_Y: f32 = 93.0;
+    const CLOCK_SIZE: f32 = 122.0;
+    // Calibrated for JetBrains Mono Bold digits: measured ~4px of clear
+    // space above and below at this size/baseline (digits overshoot the
+    // nominal baseline slightly, so this isn't just 100 minus padding) --
+    // re-measure with `--render 1` if either constant or the font changes.
+    const BASELINE_Y: f32 = 95.0;
     const LABEL_SIZE: f32 = 17.0;
     const LABEL: &str = "LAST UPDATE ";
     let cw = text_width(&fonts.mono, CLOCK_SIZE, &clock_text);
-    let lw = text_width(&fonts.arial_bold, LABEL_SIZE, LABEL);
+    let lw = text_width(&fonts.sans_bold, LABEL_SIZE, LABEL);
     let clock_x = W as f32 - 26.0 - cw;
     render::draw_text(&mut img, &fonts.mono, CLOCK_SIZE, clock_x, BASELINE_Y, &clock_text, BLACK);
-    render::draw_text(&mut img, &fonts.arial_bold, LABEL_SIZE, clock_x - lw, BASELINE_Y, LABEL, DARK_GRAY);
+    render::draw_text(&mut img, &fonts.sans_bold, LABEL_SIZE, clock_x - lw, BASELINE_Y, LABEL, DARK_GRAY);
 
     draw_line_segment_mut(&mut img, (0.0, 100.0), (W as f32, 100.0), Luma([BLACK]));
     draw_line_segment_mut(&mut img, (0.0, 101.0), (W as f32, 101.0), Luma([BLACK]));
@@ -270,18 +270,18 @@ fn draw_column(img: &mut GrayImage, fonts: &Fonts, spec: &ColumnSpec, services: 
     let head_cy = head_y + 9.0;
     if spec.arrow_left {
         draw_triangle(img, inner_x0 + 6.0, head_cy, 12.0, true, BLACK);
-        render::draw_text(img, &fonts.arial_bold, 19.0, inner_x0 + 18.0, head_y + 15.0, spec.label, BLACK);
+        render::draw_text(img, &fonts.sans_bold, 19.0, inner_x0 + 18.0, head_y + 15.0, spec.label, BLACK);
     } else {
-        let tw = text_width(&fonts.arial_bold, 19.0, spec.label);
-        render::draw_text(img, &fonts.arial_bold, 19.0, inner_x0 + inner_w - tw - 18.0, head_y + 15.0, spec.label, BLACK);
+        let tw = text_width(&fonts.sans_bold, 19.0, spec.label);
+        render::draw_text(img, &fonts.sans_bold, 19.0, inner_x0 + inner_w - tw - 18.0, head_y + 15.0, spec.label, BLACK);
         draw_triangle(img, inner_x0 + inner_w - 6.0, head_cy, 12.0, false, BLACK);
     }
     // A destination hint, not an exhaustive list -- each row below still
     // shows that specific service's real destination. Just tells someone
     // glancing at the board which platform to stand on before they've read
     // any individual row.
-    let subtitle = truncate_to_width(&fonts.arial_bold, 12.0, spec.subtitle, inner_w);
-    render::draw_text(img, &fonts.arial_bold, 12.0, inner_x0, head_y + 30.0, &subtitle, DARK_GRAY);
+    let subtitle = truncate_to_width(&fonts.sans_bold, 12.0, spec.subtitle, inner_w);
+    render::draw_text(img, &fonts.sans_bold, 12.0, inner_x0, head_y + 30.0, &subtitle, DARK_GRAY);
 
     // Caller has already filtered by platform; the server (`catchable_only`,
     // see `traintimes.rs`) already trimmed departed/uncatchable calls -- just
@@ -293,7 +293,7 @@ fn draw_column(img: &mut GrayImage, fonts: &Fonts, spec: &ColumnSpec, services: 
     let time_col_w = 92.0;
 
     if services.is_empty() {
-        render::draw_text(img, &fonts.arial_bold, 15.0, inner_x0, row_y + 10.0, "No upcoming departures", LIGHT_GRAY);
+        render::draw_text(img, &fonts.sans_bold, 15.0, inner_x0, row_y + 10.0, "No upcoming departures", LIGHT_GRAY);
         return;
     }
 
@@ -320,7 +320,7 @@ fn draw_column(img: &mut GrayImage, fonts: &Fonts, spec: &ColumnSpec, services: 
         let mut ty = ry + if i == 0 { 10.0 } else { 15.0 };
         if i == 0 {
             draw_filled_rect_mut(img, Rect::at(inner_x0 as i32, (ry + 5.0) as i32).of_size(40, 15), Luma([BLACK]));
-            render::draw_text(img, &fonts.arial_bold, 11.0, inner_x0 + 5.0, ry + 17.0, "NEXT", WHITE);
+            render::draw_text(img, &fonts.sans_bold, 11.0, inner_x0 + 5.0, ry + 17.0, "NEXT", WHITE);
             ty = ry + 24.0;
         }
 
@@ -333,7 +333,7 @@ fn draw_column(img: &mut GrayImage, fonts: &Fonts, spec: &ColumnSpec, services: 
 
         let meta_x = inner_x0 + time_col_w;
         let meta_w = inner_x0 + inner_w - meta_x;
-        render::draw_text(img, &fonts.arial_bold, 19.0, meta_x, ry + 3.0 + 17.0, dest, BLACK);
+        render::draw_text(img, &fonts.sans_bold, 19.0, meta_x, ry + 3.0 + 17.0, dest, BLACK);
 
         let sub_y = ry + 27.0;
         let (mark_kind, status_text, status_color): (Mark, String, u8) = if cancelled {
@@ -349,8 +349,8 @@ fn draw_column(img: &mut GrayImage, fonts: &Fonts, spec: &ColumnSpec, services: 
         let status_total_w = mark_w + 5.0 + status_text_w;
         let via_text = format!("FROM {}", origin.to_uppercase());
         let via_max_w = meta_w - status_total_w - 10.0;
-        let via_text = truncate_to_width(&fonts.arial_bold, 13.0, &via_text, via_max_w);
-        render::draw_text(img, &fonts.arial_bold, 13.0, meta_x, sub_y + 13.0, &via_text, DARK_GRAY);
+        let via_text = truncate_to_width(&fonts.sans_bold, 13.0, &via_text, via_max_w);
+        render::draw_text(img, &fonts.sans_bold, 13.0, meta_x, sub_y + 13.0, &via_text, DARK_GRAY);
 
         let mark_x = meta_x + meta_w - status_total_w;
         draw_status_mark(img, mark_x, sub_y + 25.0, mark_w, &mark_kind, status_color);

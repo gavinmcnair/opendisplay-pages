@@ -44,8 +44,8 @@ fn render_page(fonts: &Fonts, forecast: &Forecast) -> GrayImage {
     let hourly = &forecast.hourly;
     let n = hourly.time.len().min(hourly.temperature_2m.len()).min(hourly.precipitation_probability.len());
 
-    render::draw_text(&mut img, &fonts.arial_bold, 13.0, 26.0, 22.0 + 13.0, "EGHAM WEATHER", DARK_GRAY);
-    render::draw_text(&mut img, &fonts.arial_black, 40.0, 26.0, 76.0, "WEATHER", BLACK);
+    render::draw_text(&mut img, &fonts.sans_bold, 13.0, 26.0, 22.0 + 13.0, "EGHAM WEATHER", DARK_GRAY);
+    render::draw_text(&mut img, &fonts.sans_black, 40.0, 26.0, 76.0, "WEATHER", BLACK);
 
     // Summary computed from the whole day's range, not "the current hour" --
     // Open-Meteo returns local (Europe/London) timestamps, but figuring out
@@ -57,7 +57,7 @@ fn render_page(fonts: &Fonts, forecast: &Forecast) -> GrayImage {
         let max_t = hourly.temperature_2m[..n].iter().cloned().fold(f32::NEG_INFINITY, f32::max);
         let max_rain = hourly.precipitation_probability[..n].iter().copied().max().unwrap_or(0);
         let summary = format!("TODAY {min_t:.0}-{max_t:.0}C  UP TO {max_rain}% RAIN");
-        render::draw_text(&mut img, &fonts.arial_bold, 15.0, 26.0, 98.0, &summary, DARK_GRAY);
+        render::draw_text(&mut img, &fonts.sans_bold, 15.0, 26.0, 98.0, &summary, DARK_GRAY);
     }
 
     // Top-right summary: current conditions as an icon + big temperature +
@@ -90,7 +90,7 @@ fn draw_rain_chart(img: &mut GrayImage, fonts: &Fonts, hourly: &weather::Hourly,
     let baseline = 390.0; // 0% rain line
     let chart_h = baseline - chart_top;
 
-    render::draw_text(img, &fonts.arial_bold, 13.0, chart_x0, chart_top - 10.0, "RAIN %", DARK_GRAY);
+    render::draw_text(img, &fonts.sans_bold, 13.0, chart_x0, chart_top - 10.0, "RAIN %", DARK_GRAY);
     draw_line_segment_mut(img, (chart_x0, baseline), (chart_x1, baseline), Luma([BLACK]));
 
     // Y-axis scale -- without this, a bar's height means nothing on its own
@@ -193,10 +193,10 @@ fn draw_current_conditions(img: &mut GrayImage, fonts: &Fonts, current: &weather
     let max_w = W as f32 - 26.0 - text_x;
 
     let temp_text = format!("{:.0}C", current.temperature_2m);
-    render::draw_text(img, &fonts.arial_black, 34.0, text_x, 46.0, &temp_text, BLACK);
+    render::draw_text(img, &fonts.sans_black, 34.0, text_x, 46.0, &temp_text, BLACK);
 
-    let label = truncate_to_width(&fonts.arial_bold, 13.0, label, max_w);
-    render::draw_text(img, &fonts.arial_bold, 13.0, text_x, 68.0, &label, DARK_GRAY);
+    let label = truncate_to_width(&fonts.sans_bold, 13.0, label, max_w);
+    render::draw_text(img, &fonts.sans_bold, 13.0, text_x, 68.0, &label, DARK_GRAY);
 }
 
 const ICON_W: f32 = 56.0;

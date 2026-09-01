@@ -117,7 +117,7 @@ pub fn draw_legend(img: &mut GrayImage, fonts: &Fonts, series: &[Series], x0: f3
         let sample_w = 28.0;
         let points = [(x, y - 4.0), (x + sample_w, y - 4.0)];
         draw_series(img, &points, &s.style, &s.marker, color);
-        render::draw_text(img, &fonts.arial_bold, 13.0, x + sample_w + 8.0, y, s.label, DARK_GRAY);
-        x += sample_w + 8.0 + text_width(&fonts.arial_bold, 13.0, s.label) + 24.0;
+        render::draw_text(img, &fonts.sans_bold, 13.0, x + sample_w + 8.0, y, s.label, DARK_GRAY);
+        x += sample_w + 8.0 + text_width(&fonts.sans_bold, 13.0, s.label) + 24.0;
     }
 }
