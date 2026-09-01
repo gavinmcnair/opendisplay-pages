@@ -5,6 +5,11 @@
 # network-namespaced) and README's deployment section for host-side checks.
 
 FROM rust:1-bookworm AS build
+# btleplug's Linux backend links libdbus (bluez-async -> dbus crate ->
+# libdbus-sys), which needs the C headers and pkg-config at compile time.
+# The matching runtime .so arrives in the final stage via the `dbus` package.
+RUN apt-get update && apt-get install -y --no-install-recommends libdbus-1-dev pkg-config \
+    && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
 # Dependency layer first so code-only changes don't re-download crates.
 COPY Cargo.toml Cargo.lock ./
