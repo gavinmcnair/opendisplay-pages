@@ -53,10 +53,13 @@ const MIN_SAMPLE_GAP: Duration = Duration::from_secs(30 * 60);
 /// rate genuinely varies (BLE traffic, temperature).
 const ETA_FIT_WINDOW: Duration = Duration::from_secs(48 * 3600);
 
-/// Y axis == the Li-Ion curve's own domain (4.2V full, 3.3V cutoff), so the
-/// line's vertical position IS the charge state, not an arbitrary zoom.
-const V_MIN: f32 = 3.3;
-const V_MAX: f32 = 4.2;
+// The graph's Y axis is state-of-charge PERCENT, not volts -- that's the
+// point of running readings through the SOC curve at all: a Li-Ion voltage
+// trace is non-linear and nearly flat through the middle of its charge
+// range, so a volts axis hides the discharge rate that a % axis makes a
+// visibly straight(ish) slope. Raw millivolts still go into the history
+// file (the honest sensor value; conversions can improve later), and the
+// current voltage stays visible in the headline.
 
 #[derive(Clone, Copy)]
 struct Sample {
@@ -217,6 +220,10 @@ fn render_page(fonts: &Fonts, history: &[Sample], sys: Option<&SysInfo>) -> Gray
         let volts = last.mv as f32 / 1000.0;
         let soc = soc_percent(last.mv);
 
+        // Big SOC percentage owns the corner, live voltage + temperature in
+        // small gray underneath -- the charge state is the answer a person
+        // actually came for (the graph below is %-only for the same
+        // reason); volts stay for whoever wants them.
         let pct_text = soc.map_or("--%".to_string(), |p| format!("{p:.0}%"));
         let pw = text_width(&fonts.sans_black, 44.0, &pct_text);
         render::draw_text(&mut img, &fonts.sans_black, 44.0, W as f32 - 26.0 - pw, 56.0, &pct_text, BLACK);
@@ -239,7 +246,7 @@ fn render_page(fonts: &Fonts, history: &[Sample], sys: Option<&SysInfo>) -> Gray
     draw_line_segment_mut(&mut img, (0.0, 119.0), (W as f32, 119.0), Luma([BLACK]));
     draw_line_segment_mut(&mut img, (0.0, 120.0), (W as f32, 120.0), Luma([BLACK]));
 
-    draw_voltage_chart(&mut img, fonts, history);
+    draw_soc_chart(&mut img, fonts, history);
     draw_sys_strip(&mut img, fonts, sys);
 
     plugin::draw_status_bar(&mut img, fonts, SLOT, &render::current_time_utc_hhmm(), STATUS_LABEL);
@@ -311,30 +318,28 @@ fn draw_signal_bars(img: &mut GrayImage, x: f32, baseline_y: f32, dbm: i16) {
     }
 }
 
-fn draw_voltage_chart(img: &mut GrayImage, fonts: &Fonts, history: &[Sample]) {
+fn draw_soc_chart(img: &mut GrayImage, fonts: &Fonts, history: &[Sample]) {
     let chart_x0 = 64.0;
     let chart_x1 = W as f32 - 40.0;
     let chart_top = 150.0;
     let baseline = 390.0;
     let chart_h = baseline - chart_top;
 
-    render::draw_text(img, &fonts.sans_bold, 13.0, chart_x0, chart_top - 10.0, "VOLTS", DARK_GRAY);
+    render::draw_text(img, &fonts.sans_bold, 13.0, chart_x0, chart_top - 10.0, "CHARGE %", DARK_GRAY);
 
-    // Gridlines every 0.15V from cutoff to full -- the axis is the battery's
-    // real usable range (see V_MIN/V_MAX), so "line near the bottom" always
-    // means "nearly empty" without reading a single label.
-    let mut level = V_MIN;
-    while level <= V_MAX + 0.001 {
-        let y = baseline - chart_h * ((level - V_MIN) / (V_MAX - V_MIN));
-        if (level - V_MIN).abs() > 0.001 {
+    // Full 0-100% axis, gridlines every 25% -- a fixed axis so the line's
+    // absolute height always means the same thing, and the visible slope
+    // between any two days IS the discharge rate.
+    for pct in [0u8, 25, 50, 75, 100] {
+        let y = baseline - chart_h * (pct as f32 / 100.0);
+        if pct != 0 {
             for x in (chart_x0 as i32..chart_x1 as i32).step_by(6) {
                 img.put_pixel(x as u32, y as u32, Luma([LIGHT_GRAY]));
             }
         }
-        let label = format!("{level:.2}");
+        let label = format!("{pct}");
         let lw = text_width(&fonts.mono, 11.0, &label);
         render::draw_text(img, &fonts.mono, 11.0, chart_x0 - lw - 8.0, y + 4.0, &label, DARK_GRAY);
-        level += 0.15;
     }
     draw_line_segment_mut(img, (chart_x0, baseline), (chart_x1, baseline), Luma([BLACK]));
 
@@ -350,10 +355,7 @@ fn draw_voltage_chart(img: &mut GrayImage, fonts: &Fonts, history: &[Sample]) {
     let t_end = history.last().expect("checked non-empty above").ts;
     let t_start = t_end - WINDOW.as_secs() as i64;
     let x_at = |ts: i64| chart_x0 + (chart_x1 - chart_x0) * ((ts - t_start) as f32 / WINDOW.as_secs() as f32);
-    let y_at = |mv: u16| {
-        let v = (mv as f32 / 1000.0).clamp(V_MIN, V_MAX);
-        baseline - chart_h * ((v - V_MIN) / (V_MAX - V_MIN))
-    };
+    let y_at = |soc: f32| baseline - chart_h * (soc.clamp(0.0, 100.0) / 100.0);
 
     // Day boundaries as x-axis ticks: each midnight in the window, labelled
     // with its weekday.
@@ -378,6 +380,9 @@ fn draw_voltage_chart(img: &mut GrayImage, fonts: &Fonts, history: &[Sample]) {
         }
     }
 
-    let points: Vec<(f32, f32)> = history.iter().map(|s| (x_at(s.ts), y_at(s.mv))).collect();
+    // A sample whose voltage the SOC curve rejects (outside its domain)
+    // drops out of the plot rather than pinning dishonestly to an edge.
+    let points: Vec<(f32, f32)> =
+        history.iter().filter_map(|s| Some((x_at(s.ts), y_at(soc_percent(s.mv)?)))).collect();
     chart::draw_series(img, &points, &LineStyle::Solid, &Marker::Dot, BLACK);
 }
