@@ -124,6 +124,20 @@ async fn main() -> Result<()> {
         eprintln!("Setup complete for {}.", plugin.name());
         return Ok(());
     }
+    // One-shot CMD_SLOT_SWITCH -- the BLE equivalent of a button press, for
+    // when a human wants a specific page on screen NOW without waiting for a
+    // schedule transition. Accepts the same slot-or-name forms as --render.
+    if let Some(id) = args.iter().position(|a| a == "--switch").and_then(|i| args.get(i + 1)) {
+        let slot = if id == "0" || index.name().to_lowercase().contains(&id.to_lowercase()) {
+            0
+        } else {
+            find_plugin(&mut plugins, id).with_context(|| format!("no plugin matches '{id}'"))?.slot()
+        };
+        let peripheral = ble::find_and_connect(DEVICE_NAME).await?;
+        ble::switch_to_slot(&peripheral, slot).await?;
+        eprintln!("Switched {DEVICE_NAME} to slot {slot}.");
+        return Ok(());
+    }
 
     if args.iter().any(|a| a == "--compress-test") {
         // First registered plugin, whichever that is -- not naming a
