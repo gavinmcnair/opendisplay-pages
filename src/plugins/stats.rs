@@ -189,7 +189,7 @@ fn fingerprint_page(history: &[Sample], sys: Option<&SysInfo>) -> u64 {
     }
     if let Some(sys) = sys {
         sys.firmware.hash(&mut hasher);
-        sys.rssi_dbm.map(rssi_bars).hash(&mut hasher);
+        sys.rssi_dbm.map(plugin::rssi_bars).hash(&mut hasher);
     }
     hasher.finish()
 }
@@ -333,7 +333,7 @@ fn draw_sys_strip(img: &mut GrayImage, fonts: &Fonts, sys: Option<&SysInfo>, upt
             let lw = text_width(&fonts.mono, 13.0, &label);
             let label_x = W as f32 - 26.0 - lw;
             render::draw_text(img, &fonts.mono, 13.0, label_x, y, &label, DARK_GRAY);
-            draw_signal_bars(img, label_x - 8.0 - 22.0, y, dbm);
+            plugin::draw_signal_bars(img, label_x - 8.0 - plugin::SIGNAL_BARS_W, y, dbm);
         }
         None => {
             let label = "SIGNAL ?";
@@ -343,38 +343,6 @@ fn draw_sys_strip(img: &mut GrayImage, fonts: &Fonts, sys: Option<&SysInfo>, upt
     }
 }
 
-/// Filled-bar count for an RSSI, 0-4 -- the usual BLE rules of thumb
-/// (>= -60 excellent, -70 good, -80 workable, -90 marginal, below that
-/// basically out of range). Shared by the drawing below and
-/// `fingerprint_page` (which hashes this bucket, not the jittery raw dBm).
-fn rssi_bars(dbm: i16) -> i32 {
-    match dbm {
-        d if d >= -60 => 4,
-        d if d >= -70 => 3,
-        d if d >= -80 => 2,
-        d if d >= -90 => 1,
-        _ => 0,
-    }
-}
-
-/// Four ascending bars, wifi-icon style. Unfilled bars still render in
-/// light gray so "2 of 4" reads as a fraction, not just two floating
-/// dashes.
-fn draw_signal_bars(img: &mut GrayImage, x: f32, baseline_y: f32, dbm: i16) {
-    let filled = rssi_bars(dbm);
-    let bar_w = 4.0;
-    let gap = 2.0;
-    for i in 0..4u32 {
-        let bar_h = 4.0 + i as f32 * 3.0;
-        let bx = x + i as f32 * (bar_w + gap);
-        let color = if (i as i32) < filled { BLACK } else { LIGHT_GRAY };
-        imageproc::drawing::draw_filled_rect_mut(
-            img,
-            imageproc::rect::Rect::at(bx as i32, (baseline_y - bar_h) as i32).of_size(bar_w as u32, bar_h as u32),
-            Luma([color]),
-        );
-    }
-}
 
 fn draw_soc_chart(img: &mut GrayImage, fonts: &Fonts, history: &[Sample]) {
     let chart_x0 = 64.0;

@@ -5,3 +5,4 @@ poll.log
 *.png
 battery_history.txt
 last_push.txt
+last_rssi.txt

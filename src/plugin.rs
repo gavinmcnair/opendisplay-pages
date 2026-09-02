@@ -99,26 +99,66 @@ pub fn draw_status_bar(img: &mut GrayImage, fonts: &Fonts, slot: u8, updated_at:
         render::draw_text(img, &fonts.sans_bold, 13.0, (W as f32 - label_w) / 2.0, 460.0 + 13.0, status_label, DARK_GRAY);
     }
 
-    // Rough battery gauge on every page, rightmost in the bar (right of the
-    // slot number) -- an outline that drains as the panel's battery does,
-    // from the newest stored reading (up to an hour old; the Device Stats
-    // page has the precise numbers). Skipped entirely when no reading
-    // exists yet. Deliberately just chrome: it refreshes whenever a page
-    // repushes for its own reasons and never causes a push.
-    let icon_total_w = 24.0; // 22px body + 2px terminal nub
-    let soc = crate::battery::latest_soc_percent();
-    let icon_x = W as f32 - 26.0 - icon_total_w;
+    // Phone-style status cluster in the bottom-right corner: signal bars,
+    // then battery, rightmost -- each from the newest stored reading (the
+    // battery up to an hour old, the RSSI refreshed by every successful
+    // connect; the Device Stats page has the precise numbers) and skipped
+    // entirely when no reading exists yet. Deliberately just chrome: they
+    // refresh whenever a page repushes for its own reasons and never cause
+    // a push.
+    let mut right = W as f32 - 26.0;
+    if let Some(soc) = crate::battery::latest_soc_percent() {
+        let icon_total_w = 24.0; // 22px body + 2px terminal nub
+        right -= icon_total_w;
+        draw_battery_icon(img, right, 462.0, soc);
+        right -= 8.0;
+    }
+    if let Some(dbm) = crate::state::load_rssi() {
+        right -= SIGNAL_BARS_W;
+        draw_signal_bars(img, right, 472.0, dbm);
+        right -= 10.0;
+    }
 
     let slot_text = format!("SLOT {slot}");
     let sw = render::text_width(&fonts.sans_bold, 13.0, &slot_text);
-    let slot_x = if soc.is_some() { icon_x - 10.0 - sw } else { W as f32 - 26.0 - sw };
-    render::draw_text(img, &fonts.sans_bold, 13.0, slot_x, 460.0 + 13.0, &slot_text, DARK_GRAY);
-
-    if let Some(soc) = soc {
-        draw_battery_icon(img, icon_x, 462.0, soc);
-    }
+    render::draw_text(img, &fonts.sans_bold, 13.0, right - sw, 460.0 + 13.0, &slot_text, DARK_GRAY);
 
     render::quantize_to_4gray(img);
+}
+
+/// Filled-bar count for an RSSI, 0-4 -- the usual BLE rules of thumb
+/// (>= -60 excellent, -70 good, -80 workable, -90 marginal, below that
+/// basically out of range). Shared by the status-bar chrome and the Device
+/// Stats page (which also hashes this bucket, never the jittery raw dBm).
+pub fn rssi_bars(dbm: i16) -> i32 {
+    match dbm {
+        d if d >= -60 => 4,
+        d if d >= -70 => 3,
+        d if d >= -80 => 2,
+        d if d >= -90 => 1,
+        _ => 0,
+    }
+}
+
+/// Total width of the signal icon drawn by `draw_signal_bars`.
+pub const SIGNAL_BARS_W: f32 = 4.0 * 3.0 + 3.0 * 2.0; // 4 bars, 3px wide, 2px gaps
+
+/// Four ascending bars, phone-signal style, topping out at 10px to match
+/// the battery icon's height. Unfilled bars still render in light gray so
+/// "2 of 4" reads as a fraction, not two floating dashes. `baseline_y` is
+/// the bars' bottom edge.
+pub fn draw_signal_bars(img: &mut GrayImage, x: f32, baseline_y: f32, dbm: i16) {
+    let filled = rssi_bars(dbm);
+    for i in 0..4u32 {
+        let bar_h = 4 + i * 2; // 4,6,8,10px
+        let bx = x + i as f32 * 5.0; // 3px bar + 2px gap
+        let color = if (i as i32) < filled { BLACK } else { render::LIGHT_GRAY };
+        draw_filled_rect_mut(
+            img,
+            Rect::at(bx as i32, (baseline_y as i32) - bar_h as i32).of_size(3, bar_h),
+            Luma([color]),
+        );
+    }
 }
 
 /// A 22x10 battery outline with a 2px terminal nub, filled from the left in

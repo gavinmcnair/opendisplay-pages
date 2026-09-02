@@ -115,6 +115,9 @@ pub async fn find_and_connect_with_rssi(device_name: &str) -> Result<(Peripheral
                     .await
                     .map_err(|_| anyhow!("GATT service discovery timed out after {CONNECT_TIMEOUT:?}"))?
                     .context("discovering GATT services")?;
+                if let Some(dbm) = rssi {
+                    crate::state::record_rssi(dbm); // feed the status bar's signal icon on every connect
+                }
                 return Ok((target, rssi));
             }
             Err(e) => {
