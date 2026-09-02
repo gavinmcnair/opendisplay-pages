@@ -73,14 +73,33 @@ pub async fn find_and_connect_with_rssi(device_name: &str) -> Result<(Peripheral
     adapter.start_scan(ScanFilter::default()).await.context("starting BLE scan")?;
 
     let deadline = tokio::time::Instant::now() + SCAN_TIMEOUT;
+    // On BlueZ the first sighting of the device is often a cached D-Bus
+    // object with rssi=None -- the value only attaches when the next
+    // advertising report lands (CoreBluetooth surfaces peripherals ONLY via
+    // adverts, so the Mac always had it). The RSSI feeds the status-bar
+    // signal icon, so give it a bounded grace period to appear rather than
+    // grabbing the stale first hit; still connect if one never shows.
+    let mut seen: Option<(Peripheral, Option<i16>)> = None;
+    let mut rssi_deadline: Option<tokio::time::Instant> = None;
     let (peripheral, rssi) = loop {
-        if let Some(found) = find_by_name(&adapter, device_name).await? {
-            let _ = adapter.stop_scan().await;
-            break found;
+        if let Some((p, r)) = find_by_name(&adapter, device_name).await? {
+            if r.is_some() {
+                let _ = adapter.stop_scan().await;
+                break (p, r);
+            }
+            seen = Some((p, r)); // keep the handle; wait a moment for an rssi-bearing advert
+            let rd = *rssi_deadline.get_or_insert_with(|| tokio::time::Instant::now() + Duration::from_secs(2));
+            if tokio::time::Instant::now() >= rd {
+                let _ = adapter.stop_scan().await;
+                break seen.take().expect("just set");
+            }
         }
         if tokio::time::Instant::now() >= deadline {
             let _ = adapter.stop_scan().await; // don't leave the adapter scanning forever on the failure path
-            bail!("device '{device_name}' not found within {SCAN_TIMEOUT:?}");
+            match seen {
+                Some(found) => break found,
+                None => bail!("device '{device_name}' not found within {SCAN_TIMEOUT:?}"),
+            }
         }
         tokio::time::sleep(Duration::from_millis(300)).await;
     };
