@@ -16,6 +16,13 @@ use crate::protocol::{self, DataResponse, PipeParams, SlotSwitchResponse, StartR
 pub const DEVICE_NAME: &str = "ODC48BB0";
 
 const NOTIFY_TIMEOUT: Duration = Duration::from_secs(30);
+// DATA-phase ACKs get a much shorter wait than other responses: on a lossy
+// link (the Pi at -51dBm, unlike the Mac a metre from the panel) a lost ACK
+// notification is common, and the correct reaction is a fast retransmit
+// from the confirmed point -- waiting the full NOTIFY_TIMEOUT for an ACK
+// that already evaporated just burns the operation budget (observed live,
+// 2026-09-02: transfers stalling 30s mid-stream, then dying at OP_TIMEOUT).
+const DATA_ACK_TIMEOUT: Duration = Duration::from_secs(5);
 const SCAN_TIMEOUT: Duration = Duration::from_secs(20);
 // btleplug's connect()/discover_services() have no timeout of their own --
 // observed hanging indefinitely (multi-minute, never returning) after the
@@ -30,7 +37,12 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 // kind of complexity this project avoids when one outer bound covers all of
 // them at once. 60s is generous even for the largest slot payload's full
 // negotiate+stream+end sequence under normal conditions.
-const OP_TIMEOUT: Duration = Duration::from_secs(60);
+// 180s, raised from 60s (2026-09-02): on the Pi's link a big page's
+// transfer can legitimately need several retransmit rounds; killing a
+// transfer that is making (slow) progress just repeats the same fight from
+// zero next tick. The fast DATA_ACK_TIMEOUT above is what keeps a genuinely
+// dead transfer from soaking anywhere near this long per stall.
+const OP_TIMEOUT: Duration = Duration::from_secs(180);
 
 pub async fn find_and_connect(device_name: &str) -> Result<Peripheral> {
     Ok(find_and_connect_with_rssi(device_name).await?.0)
@@ -61,15 +73,52 @@ pub async fn find_and_connect_with_rssi(device_name: &str) -> Result<(Peripheral
         tokio::time::sleep(Duration::from_millis(300)).await;
     };
 
-    tokio::time::timeout(CONNECT_TIMEOUT, peripheral.connect())
-        .await
-        .map_err(|_| anyhow!("BLE connect timed out after {CONNECT_TIMEOUT:?}"))?
-        .context("BLE connect")?;
-    tokio::time::timeout(CONNECT_TIMEOUT, peripheral.discover_services())
-        .await
-        .map_err(|_| anyhow!("GATT service discovery timed out after {CONNECT_TIMEOUT:?}"))?
-        .context("discovering GATT services")?;
-    Ok((peripheral, rssi))
+    // Retry the connect: the panel light-sleeps between advertising events
+    // (sleep_timeout_ms 30s in its config), and a first LE connection
+    // attempt against it often dies with "Connection Failed to be
+    // Established (0x3e)" -- measured ~50% single-attempt success from the
+    // Pi even with correct radio firmware. macOS hid this by retrying inside
+    // CoreBluetooth; BlueZ surfaces every failure, so we retry here.
+    //
+    // Retry etiquette matters more than count (learned live, 2026-09-02):
+    // never issue a cancel/disconnect after a FAILED connect (there is no
+    // connection to clean, and the cancel can race the panel's own
+    // connection setup and wedge its advertising entirely -- a panel-side
+    // firmware fragility, but we don't get to reboot the panel remotely),
+    // space attempts a few seconds apart like a human retrying
+    // bluetoothctl (measured harmless), and re-find the device fresh each
+    // attempt (BlueZ expires its D-Bus object between attempts, turning a
+    // cached handle into 'Method "Connect" doesn't exist').
+    const CONNECT_ATTEMPTS: u32 = 3;
+    let mut last_err = anyhow!("unreachable");
+    let mut target = peripheral;
+    for attempt in 1..=CONNECT_ATTEMPTS {
+        let connected = tokio::time::timeout(CONNECT_TIMEOUT, target.connect())
+            .await
+            .map_err(|_| anyhow!("BLE connect timed out after {CONNECT_TIMEOUT:?}"))
+            .and_then(|r| r.context("BLE connect"));
+        match connected {
+            Ok(()) => {
+                tokio::time::timeout(CONNECT_TIMEOUT, target.discover_services())
+                    .await
+                    .map_err(|_| anyhow!("GATT service discovery timed out after {CONNECT_TIMEOUT:?}"))?
+                    .context("discovering GATT services")?;
+                return Ok((target, rssi));
+            }
+            Err(e) => {
+                last_err = e;
+                if attempt < CONNECT_ATTEMPTS {
+                    eprintln!("BLE connect attempt {attempt}/{CONNECT_ATTEMPTS} failed ({last_err:#}); retrying");
+                    tokio::time::sleep(Duration::from_secs(3)).await;
+                    // Fresh lookup -- the previous object may be stale.
+                    if let Ok(Some((p, _))) = find_by_name(&adapter, device_name).await {
+                        target = p;
+                    }
+                }
+            }
+        }
+    }
+    Err(last_err.context(format!("after {CONNECT_ATTEMPTS} connect attempts")))
 }
 
 async fn find_by_name(adapter: &btleplug::platform::Adapter, name: &str) -> Result<Option<(Peripheral, Option<i16>)>> {
@@ -116,9 +165,20 @@ pub async fn upload_pipe_write_to_slot(peripheral: &Peripheral, slot_id: u8, pay
     eprintln!("Slot {slot_id}: compressed {} bytes -> {} bytes", payload.len(), compressed.len());
     let start_req =
         protocol::build_start_slot(slot_id, payload.len() as u32, 16, 8, 244, compressed.len() as u32);
-    tokio::time::timeout(OP_TIMEOUT, run_pipe_write(peripheral, &compressed, &start_req, false))
+    let result = tokio::time::timeout(OP_TIMEOUT, run_pipe_write(peripheral, &compressed, &start_req, false))
         .await
-        .map_err(|_| anyhow!("slot {slot_id} upload timed out after {OP_TIMEOUT:?}"))?
+        .map_err(|_| anyhow!("slot {slot_id} upload timed out after {OP_TIMEOUT:?}"))
+        .and_then(|r| r);
+    // Disconnect on EVERY exit path, not just success. run_pipe_write's
+    // error paths (NACK bails, END-ack timeout, the outer OP_TIMEOUT above)
+    // used to leave the connection dangling; macOS's CoreBluetooth cleaned
+    // that up implicitly, but BlueZ does not -- the very next tick then hit
+    // "writing START: In Progress" against the stale connection, and every
+    // retry after it (observed live on the Pi, 2026-09-02).
+    if result.is_err() {
+        let _ = peripheral.disconnect().await;
+    }
+    result
 }
 
 /// Sends CMD_SLOT_SWITCH (0x0084, LOCAL FORK DIVERGENCE) -- the server-driven
@@ -128,9 +188,17 @@ pub async fn upload_pipe_write_to_slot(peripheral: &Peripheral, slot_id: u8, pay
 /// which won't reply at all -- the caller should treat any error here as
 /// "couldn't force the switch this tick, try again next tick" rather than fatal).
 pub async fn switch_to_slot(peripheral: &Peripheral, slot_id: u8) -> Result<()> {
-    tokio::time::timeout(OP_TIMEOUT, switch_to_slot_inner(peripheral, slot_id))
+    let result = tokio::time::timeout(OP_TIMEOUT, switch_to_slot_inner(peripheral, slot_id))
         .await
-        .map_err(|_| anyhow!("slot switch to {slot_id} timed out after {OP_TIMEOUT:?}"))?
+        .map_err(|_| anyhow!("slot switch to {slot_id} timed out after {OP_TIMEOUT:?}"))
+        .and_then(|r| r);
+    // Same rationale as upload_pipe_write_to_slot: never leave a dangling
+    // connection on an error path -- BlueZ (unlike CoreBluetooth) won't
+    // clean it up, and the next operation fails with "In Progress".
+    if result.is_err() {
+        let _ = peripheral.disconnect().await;
+    }
+    result
 }
 
 async fn switch_to_slot_inner(peripheral: &Peripheral, slot_id: u8) -> Result<()> {
@@ -375,7 +443,15 @@ async fn run_pipe_write(
 
 async fn wait_for<T>(
     notifications: &mut (impl StreamExt<Item = btleplug::api::ValueNotification> + Unpin),
+    parse: impl FnMut(&[u8]) -> Option<T>,
+) -> Result<T> {
+    wait_for_within(notifications, parse, NOTIFY_TIMEOUT).await
+}
+
+async fn wait_for_within<T>(
+    notifications: &mut (impl StreamExt<Item = btleplug::api::ValueNotification> + Unpin),
     mut parse: impl FnMut(&[u8]) -> Option<T>,
+    timeout: Duration,
 ) -> Result<T> {
     let fut = async {
         while let Some(n) = notifications.next().await {
@@ -385,15 +461,18 @@ async fn wait_for<T>(
         }
         None
     };
-    match tokio::time::timeout(NOTIFY_TIMEOUT, fut).await {
+    match tokio::time::timeout(timeout, fut).await {
         Ok(Some(v)) => Ok(v),
         Ok(None) => bail!("notification stream ended"),
         Err(_) => bail!("timed out waiting for a response"),
     }
 }
 
+/// Short timeout on purpose (`DATA_ACK_TIMEOUT`, not `NOTIFY_TIMEOUT`) --
+/// the caller's error path retransmits from the confirmed point, which is
+/// the right response to a lost ACK and needs to happen quickly.
 async fn wait_for_data_ack(
     notifications: &mut (impl StreamExt<Item = btleplug::api::ValueNotification> + Unpin),
 ) -> Result<DataResponse> {
-    wait_for(notifications, |d| protocol::parse_data_response(d)).await
+    wait_for_within(notifications, |d| protocol::parse_data_response(d), DATA_ACK_TIMEOUT).await
 }
