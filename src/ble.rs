@@ -42,6 +42,18 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 // transfer that is making (slow) progress just repeats the same fight from
 // zero next tick. The fast DATA_ACK_TIMEOUT above is what keeps a genuinely
 // dead transfer from soaking anywhere near this long per stall.
+// Requested transfer window / ACK cadence. 8/4, down from 16/8
+// (2026-09-02): the panel is a two-chip design (nRF radio -> internal UART
+// -> ESP32), and large pages (the ~14KB trains board = 60 frames) stalled
+// mid-stream repeatedly at full-rate 16-frame bursts -- from three
+// different hosts, at -56dBm near line of sight -- while small pages
+// sailed through. Halving the burst gives the inter-chip path breathing
+// room at the cost of a slower transfer; robustness beats speed at these
+// payload sizes. If stalls persist, drop to 4/2 before blaming anything
+// else.
+const REQ_WINDOW: u8 = 8;
+const REQ_ACK_EVERY: u8 = 4;
+
 const OP_TIMEOUT: Duration = Duration::from_secs(180);
 
 pub async fn find_and_connect(device_name: &str) -> Result<Peripheral> {
@@ -164,7 +176,7 @@ pub async fn upload_pipe_write_to_slot(peripheral: &Peripheral, slot_id: u8, pay
     let compressed = zlib_compress(payload);
     eprintln!("Slot {slot_id}: compressed {} bytes -> {} bytes", payload.len(), compressed.len());
     let start_req =
-        protocol::build_start_slot(slot_id, payload.len() as u32, 16, 8, 244, compressed.len() as u32);
+        protocol::build_start_slot(slot_id, payload.len() as u32, REQ_WINDOW, REQ_ACK_EVERY, 244, compressed.len() as u32);
     let result = tokio::time::timeout(OP_TIMEOUT, run_pipe_write(peripheral, &compressed, &start_req, false))
         .await
         .map_err(|_| anyhow!("slot {slot_id} upload timed out after {OP_TIMEOUT:?}"))
@@ -339,7 +351,7 @@ async fn run_pipe_write(
     let params: PipeParams = match resp {
         StartResponse::Nack { err } => bail!("PIPE_WRITE_START NACKed, err=0x{err:02x}"),
         StartResponse::Ack { ver: _, dev_max_window, dev_max_ack_every, dev_max_frame, flags: _ } => {
-            protocol::negotiate_params(16, 8, 244, dev_max_window, dev_max_ack_every, dev_max_frame, true)
+            protocol::negotiate_params(REQ_WINDOW, REQ_ACK_EVERY, 244, dev_max_window, dev_max_ack_every, dev_max_frame, true)
         }
     };
     eprintln!(
@@ -377,24 +389,47 @@ async fn run_pipe_write(
         }
 
         match wait_for_data_ack(&mut notifications).await {
-            Ok(DataResponse::Ack(ack)) => {
-                // Advance confirmed while consecutive frames from `confirmed` are acked.
-                let mut c = confirmed;
-                while (c as usize) < total && protocol::ack_has(&ack, c) {
-                    c = c.wrapping_add(1);
-                    if c == 0 {
-                        break; // wrapped past 256, shouldn't happen given the size guard above
+            Ok(first) => {
+                // CRITICAL: drain every SACK already queued and act on the
+                // NEWEST one, not the first. The stream buffers every
+                // notification; consuming one per loop iteration on a slow
+                // link means deciding from a SACK many frames old, "seeing
+                // no progress", and retransmitting a frame the device
+                // already has -- which elicits another SACK, sustaining the
+                // loop forever. Observed live (2026-09-02, HCI trace): the
+                // sender pinned on seq 0x0c at one retransmit per
+                // connection interval while every reply said
+                // highest_seen=19 "I have everything". Big pages (deeper
+                // backlog) never finished; macOS's fast intervals kept the
+                // queue shallow, which is why the Mac masked this.
+                let mut newest = first;
+                use futures::FutureExt as _;
+                while let Some(Some(n)) = notifications.next().now_or_never() {
+                    if let Some(r) = protocol::parse_data_response(&n.value) {
+                        newest = r;
                     }
                 }
-                if c != confirmed {
-                    confirmed = c;
-                } else {
-                    // No progress from this ACK -- retransmit the oldest unacked frame.
-                    let frame = protocol::build_data_frame(confirmed, chunks[confirmed as usize]);
-                    peripheral.write(&ch, &frame, WriteType::WithoutResponse).await?;
+                match newest {
+                    DataResponse::Ack(ack) => {
+                        // Advance confirmed while consecutive frames from `confirmed` are acked.
+                        let mut c = confirmed;
+                        while (c as usize) < total && protocol::ack_has(&ack, c) {
+                            c = c.wrapping_add(1);
+                            if c == 0 {
+                                break; // wrapped past 256, shouldn't happen given the size guard above
+                            }
+                        }
+                        if c != confirmed {
+                            confirmed = c;
+                        } else {
+                            // No progress even from the newest ACK -- retransmit the oldest unacked frame.
+                            let frame = protocol::build_data_frame(confirmed, chunks[confirmed as usize]);
+                            peripheral.write(&ch, &frame, WriteType::WithoutResponse).await?;
+                        }
+                    }
+                    DataResponse::Nack { err, .. } => bail!("PIPE_WRITE_DATA NACKed, err=0x{err:02x}"),
                 }
             }
-            Ok(DataResponse::Nack { err, .. }) => bail!("PIPE_WRITE_DATA NACKed, err=0x{err:02x}"),
             Err(e) => {
                 eprintln!("No ACK progress ({e}); retransmitting from confirmed point");
                 let frame = protocol::build_data_frame(confirmed, chunks[confirmed as usize]);
