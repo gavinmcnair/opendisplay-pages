@@ -169,12 +169,21 @@ async fn main() -> Result<()> {
 
     let once = args.iter().any(|a| a == "--once");
 
-    // Held for the life of the process; deliberately AFTER the --render/
+    // Doubles as the single-instance lock AND the local control socket:
+    // binding proves no other poller is running, and the same listener then
+    // accepts one-line commands (`switch <slot-or-name>\n`) from anything on
+    // this machine -- e.g. the Zigbee stack mapping a Philips Hue button
+    // press to a page. Commands are handled inside the main loop, so a
+    // control switch serializes with pushes through the one BLE owner
+    // instead of racing it (a second concurrent BLE client wedged the panel
+    // more than once on 2026-09-02). Deliberately AFTER the --render/
     // --setup/--compress-test escape hatches above, which are safe (and
     // useful) to run while a poller is already up.
-    let _instance_lock = std::net::TcpListener::bind(("127.0.0.1", INSTANCE_LOCK_PORT)).context(
+    let instance_lock = std::net::TcpListener::bind(("127.0.0.1", INSTANCE_LOCK_PORT)).context(
         "another egham_ble instance appears to be running (instance lock port busy) -- kill it first",
     )?;
+    instance_lock.set_nonblocking(true).context("setting control socket non-blocking")?;
+    let control = tokio::net::TcpListener::from_std(instance_lock).context("adopting control socket")?;
 
     let mut last_fingerprints: Vec<Option<u64>> =
         plugins.iter().map(|p| state::load(&state_path_for_slot(p.slot()))).collect();
@@ -264,11 +273,59 @@ async fn main() -> Result<()> {
         }
         // Sleep until the earliest plugin poll deadline, capped at
         // SCHEDULE_TICK_INTERVAL so schedule boundaries are still checked at
-        // least that often -- see that constant's comment.
+        // least that often (see that constant's comment) -- but wake early
+        // for a control connection, so a button press switches the page in
+        // ~seconds instead of waiting out the sleep.
         let schedule_deadline = Instant::now() + SCHEDULE_TICK_INTERVAL;
         let wake = next_poll.iter().min().copied().unwrap_or(schedule_deadline).min(schedule_deadline);
-        tokio::time::sleep_until(tokio::time::Instant::from_std(wake)).await;
+        tokio::select! {
+            _ = tokio::time::sleep_until(tokio::time::Instant::from_std(wake)) => {}
+            accepted = control.accept() => {
+                if let Ok((stream, _)) = accepted {
+                    handle_control_command(stream, &mut plugins).await;
+                }
+            }
+        }
     }
+}
+
+/// One control-socket exchange: read a single line, act, reply, close.
+/// Protocol (line-oriented, trivially scriptable -- e.g. from the Zigbee
+/// stack: `echo "switch trains" | nc 127.0.0.1 48412`):
+///   switch <slot-or-name>  -> forces that page onto the panel (CMD_SLOT_SWITCH)
+/// Replies `ok ...` or `err ...`. The 2s read timeout keeps a stuck client
+/// from stalling the poll loop; the switch itself runs here, in the loop,
+/// serialized with every other BLE operation.
+async fn handle_control_command(stream: tokio::net::TcpStream, plugins: &mut [Box<dyn Plugin>]) {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    let mut stream = stream;
+    let mut line = String::new();
+    let read = tokio::time::timeout(Duration::from_secs(2), BufReader::new(&mut stream).read_line(&mut line)).await;
+    if !matches!(read, Ok(Ok(_))) {
+        return;
+    }
+    let reply = match line.trim().split_once(' ') {
+        Some(("switch", id)) => {
+            let id = id.trim();
+            let slot = if id == "0" || "index".contains(&id.to_lowercase()) {
+                Some(0)
+            } else {
+                find_plugin(plugins, id).map(|p| p.slot())
+            };
+            match slot {
+                Some(slot) => match force_switch(slot).await {
+                    Ok(()) => {
+                        eprintln!("Control: switched {DEVICE_NAME} to slot {slot}.");
+                        format!("ok slot {slot}\n")
+                    }
+                    Err(e) => format!("err switch failed: {e:#}\n"),
+                },
+                None => format!("err no plugin matches '{id}'\n"),
+            }
+        }
+        _ => "err unknown command (try: switch <slot-or-name>)\n".to_string(),
+    };
+    let _ = stream.write_all(reply.as_bytes()).await;
 }
 
 /// Connects and sends CMD_SLOT_SWITCH. A separate connect per call, same as

@@ -98,6 +98,22 @@ binary (gitignored) — a page is only re-pushed to the device when its content
 fingerprint actually changes, so e.g. the trains page's 10-second poll (see
 `plugins::trains`) doesn't re-transfer an unchanged board.
 
+## Control socket
+
+The running poller's single-instance lock port (`127.0.0.1:48412`) doubles
+as a line-oriented control socket, so anything local can drive the panel —
+built for mapping Zigbee button events (e.g. Philips Hue dimmers, via the
+Zigbee stack sharing the Pi) to pages:
+
+```bash
+echo "switch trains" | nc 127.0.0.1 48412   # -> ok slot 2
+echo "switch 0"      | nc 127.0.0.1 48412   # -> ok slot 0 (index)
+```
+
+Replies `ok slot <n>` or `err ...`. The switch executes inside the poller's
+own loop, serialized with pushes through the one BLE owner — never race the
+radio with a second process (see `--switch` below for when no poller runs).
+
 ## Docker / TrueNAS SCALE deployment
 
 The target deployment is a TrueNAS SCALE Custom App with a USB Bluetooth
