@@ -7,10 +7,11 @@
 use anyhow::Result;
 use futures::future::LocalBoxFuture;
 use image::{GrayImage, Luma};
-use imageproc::drawing::draw_line_segment_mut;
+use imageproc::drawing::{draw_filled_rect_mut, draw_line_segment_mut};
+use imageproc::rect::Rect;
 use std::time::Duration;
 
-use crate::render::{self, Fonts, BLACK, DARK_GRAY, W};
+use crate::render::{self, Fonts, BLACK, DARK_GRAY, W, WHITE};
 
 /// Default `Plugin::poll_interval` -- Open-Meteo and Google Calendar both
 /// stay comfortably under their rate limits at this cadence. A plugin backed
@@ -98,9 +99,41 @@ pub fn draw_status_bar(img: &mut GrayImage, fonts: &Fonts, slot: u8, updated_at:
         render::draw_text(img, &fonts.sans_bold, 13.0, (W as f32 - label_w) / 2.0, 460.0 + 13.0, status_label, DARK_GRAY);
     }
 
+    // Rough battery gauge on every page, rightmost in the bar (right of the
+    // slot number) -- an outline that drains as the panel's battery does,
+    // from the newest stored reading (up to an hour old; the Device Stats
+    // page has the precise numbers). Skipped entirely when no reading
+    // exists yet. Deliberately just chrome: it refreshes whenever a page
+    // repushes for its own reasons and never causes a push.
+    let icon_total_w = 24.0; // 22px body + 2px terminal nub
+    let soc = crate::battery::latest_soc_percent();
+    let icon_x = W as f32 - 26.0 - icon_total_w;
+
     let slot_text = format!("SLOT {slot}");
     let sw = render::text_width(&fonts.sans_bold, 13.0, &slot_text);
-    render::draw_text(img, &fonts.sans_bold, 13.0, W as f32 - 26.0 - sw, 460.0 + 13.0, &slot_text, DARK_GRAY);
+    let slot_x = if soc.is_some() { icon_x - 10.0 - sw } else { W as f32 - 26.0 - sw };
+    render::draw_text(img, &fonts.sans_bold, 13.0, slot_x, 460.0 + 13.0, &slot_text, DARK_GRAY);
+
+    if let Some(soc) = soc {
+        draw_battery_icon(img, icon_x, 462.0, soc);
+    }
 
     render::quantize_to_4gray(img);
+}
+
+/// A 22x10 battery outline with a 2px terminal nub, filled from the left in
+/// proportion to `soc` (0-100). A nearly-empty battery still shows a 1px
+/// sliver so "critically low" reads differently from "no reading" (which
+/// draws nothing at all).
+fn draw_battery_icon(img: &mut GrayImage, x: f32, y: f32, soc: f32) {
+    let (x, y) = (x as i32, y as i32);
+    let (w, h): (u32, u32) = (22, 10);
+    draw_filled_rect_mut(img, Rect::at(x, y).of_size(w, h), Luma([BLACK]));
+    draw_filled_rect_mut(img, Rect::at(x + 1, y + 1).of_size(w - 2, h - 2), Luma([WHITE]));
+    // Terminal nub, vertically centered on the right edge.
+    draw_filled_rect_mut(img, Rect::at(x + w as i32, y + 2).of_size(2, h - 4), Luma([BLACK]));
+
+    let inner_w = w - 4; // 2px inset inside the outline
+    let fill = ((inner_w as f32 * soc.clamp(0.0, 100.0) / 100.0).round() as u32).max(1);
+    draw_filled_rect_mut(img, Rect::at(x + 2, y + 2).of_size(fill, h - 4), Luma([BLACK]));
 }

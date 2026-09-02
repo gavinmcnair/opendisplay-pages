@@ -25,7 +25,7 @@
 //! `<unix_ts> <mv> <temp_c>` line each, pruned to the 7-day window.
 
 use anyhow::{Context, Result};
-use battery_estimator::{BatteryChemistry, SocEstimator};
+use crate::battery::{soc_percent, HISTORY_FILE};
 use btleplug::api::Peripheral as _;
 use chrono::{DateTime, Local, TimeZone};
 use futures::future::LocalBoxFuture;
@@ -44,7 +44,6 @@ pub const SLOT: u8 = 1;
 const NAME: &str = "Device Stats";
 const STATUS_LABEL: &str = "PANEL SYSTEM STATS";
 
-const HISTORY_FILE: &str = "battery_history.txt";
 /// One column per hour for a week -- matches the poll cadence below.
 const WINDOW: Duration = Duration::from_secs(7 * 24 * 3600);
 /// Don't append a second reading within this gap -- a restart mid-hour
@@ -193,10 +192,6 @@ fn fingerprint_page(history: &[Sample], sys: Option<&SysInfo>) -> u64 {
         sys.rssi_dbm.map(rssi_bars).hash(&mut hasher);
     }
     hasher.finish()
-}
-
-fn soc_percent(mv: u16) -> Option<f32> {
-    SocEstimator::new(BatteryChemistry::LiIon).estimate_soc(mv as f32 / 1000.0).ok()
 }
 
 /// Least-squares SOC slope over the trailing `ETA_FIT_WINDOW`, extrapolated
