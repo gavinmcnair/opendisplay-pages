@@ -106,13 +106,21 @@ built for mapping Zigbee button events (e.g. Philips Hue dimmers, via the
 Zigbee stack sharing the Pi) to pages:
 
 ```bash
-echo "switch trains" | nc 127.0.0.1 48412   # -> ok slot 2
-echo "switch 0"      | nc 127.0.0.1 48412   # -> ok slot 0 (index)
+echo "switch 2" | nc 127.0.0.1 48412   # -> ok slot 2
+echo "switch 0" | nc 127.0.0.1 48412   # -> ok slot 0 (index)
 ```
 
-Replies `ok slot <n>` or `err ...`. The switch executes inside the poller's
-own loop, serialized with pushes through the one BLE owner — never race the
-radio with a second process (see `--switch` below for when no poller runs).
+Slot numbers only — this is a machine interface for button mappings, not a
+human CLI (that's `--switch`, which also matches names). Replies
+`ok slot <n>` or `err ...`. The switch executes inside the poller's own
+loop, serialized with pushes through the one BLE owner — never race the
+radio with a second process. `up`/`down` cycling is deliberately absent
+here: the firmware's button handler already owns cycle logic (wraps at real
+capacity, skips unpopulated slots and slot 0) and only the device knows its
+true current slot, so cycling belongs in a firmware extension of
+`CMD_SLOT_SWITCH` (reserved slot_id values invoking the button handler),
+not a client-side reimplementation that drifts when physical buttons move
+the page.
 
 ## Docker / TrueNAS SCALE deployment
 

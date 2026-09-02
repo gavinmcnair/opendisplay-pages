@@ -199,6 +199,19 @@ async fn main() -> Result<()> {
     // so a BLE failure retries next tick instead of losing the transition.
     let mut acked_rule_slot: Option<u8> = None;
 
+    // Registered slots (plus 0, the index) -- the control socket validates
+    // against this rather than letting a typo'd number NACK at the device.
+    // Note there is deliberately NO client-side cycle logic or "current
+    // slot" tracking here: the firmware's button handler already owns
+    // cycling (wraps at real capacity, skips unpopulated slots, skips 0),
+    // and only the device knows its true current slot -- physical button
+    // presses move it without telling us. up/down over this socket should
+    // arrive as a firmware extension of CMD_SLOT_SWITCH (reserved slot_id
+    // values invoking the same handler a button press does), not a
+    // client-side reimplementation that drifts.
+    let mut known_slots: Vec<u8> = plugins.iter().map(|p| p.slot()).chain(std::iter::once(0)).collect();
+    known_slots.sort_unstable();
+
     // Per-plugin, not one shared gate: each plugin's own `poll_interval()`
     // decides how often the orchestrator even calls its `render()` (see that
     // method's doc comment -- trains.rs uses a fast interval here paired
@@ -282,7 +295,7 @@ async fn main() -> Result<()> {
             _ = tokio::time::sleep_until(tokio::time::Instant::from_std(wake)) => {}
             accepted = control.accept() => {
                 if let Ok((stream, _)) = accepted {
-                    handle_control_command(stream, &mut plugins).await;
+                    handle_control_command(stream, &known_slots).await;
                 }
             }
         }
@@ -291,12 +304,16 @@ async fn main() -> Result<()> {
 
 /// One control-socket exchange: read a single line, act, reply, close.
 /// Protocol (line-oriented, trivially scriptable -- e.g. from the Zigbee
-/// stack: `echo "switch trains" | nc 127.0.0.1 48412`):
-///   switch <slot-or-name>  -> forces that page onto the panel (CMD_SLOT_SWITCH)
-/// Replies `ok ...` or `err ...`. The 2s read timeout keeps a stuck client
-/// from stalling the poll loop; the switch itself runs here, in the loop,
-/// serialized with every other BLE operation.
-async fn handle_control_command(stream: tokio::net::TcpStream, plugins: &mut [Box<dyn Plugin>]) {
+/// stack: `echo "switch 2" | nc 127.0.0.1 48412`):
+///   switch <slot-number>  -> forces that page onto the panel (CMD_SLOT_SWITCH)
+/// Numbers only, on purpose: this is a machine interface for button
+/// mappings, not a human CLI (that's `--switch`). `up`/`down` cycling is a
+/// planned FIRMWARE extension of CMD_SLOT_SWITCH (see the comment at
+/// `known_slots`), not something to fake here. Replies `ok ...` or
+/// `err ...`. The 2s read timeout keeps a stuck client from stalling the
+/// poll loop; the switch itself runs here, in the loop, serialized with
+/// every other BLE operation.
+async fn handle_control_command(stream: tokio::net::TcpStream, known_slots: &[u8]) {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     let mut stream = stream;
     let mut line = String::new();
@@ -305,25 +322,18 @@ async fn handle_control_command(stream: tokio::net::TcpStream, plugins: &mut [Bo
         return;
     }
     let reply = match line.trim().split_once(' ') {
-        Some(("switch", id)) => {
-            let id = id.trim();
-            let slot = if id == "0" || "index".contains(&id.to_lowercase()) {
-                Some(0)
-            } else {
-                find_plugin(plugins, id).map(|p| p.slot())
-            };
-            match slot {
-                Some(slot) => match force_switch(slot).await {
-                    Ok(()) => {
-                        eprintln!("Control: switched {DEVICE_NAME} to slot {slot}.");
-                        format!("ok slot {slot}\n")
-                    }
-                    Err(e) => format!("err switch failed: {e:#}\n"),
-                },
-                None => format!("err no plugin matches '{id}'\n"),
-            }
-        }
-        _ => "err unknown command (try: switch <slot-or-name>)\n".to_string(),
+        Some(("switch", arg)) => match arg.trim().parse::<u8>() {
+            Ok(slot) if known_slots.contains(&slot) => match force_switch(slot).await {
+                Ok(()) => {
+                    eprintln!("Control: switched {DEVICE_NAME} to slot {slot}.");
+                    format!("ok slot {slot}\n")
+                }
+                Err(e) => format!("err switch failed: {e:#}\n"),
+            },
+            Ok(slot) => format!("err slot {slot} not registered (known: {known_slots:?})\n"),
+            Err(_) => "err switch takes a slot number\n".to_string(),
+        },
+        _ => "err unknown command (try: switch <slot-number>)\n".to_string(),
     };
     let _ = stream.write_all(reply.as_bytes()).await;
 }
