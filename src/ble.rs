@@ -375,17 +375,30 @@ async fn run_pipe_write(
     }
 
     let mut confirmed: u8 = 0; // number of chunks (0..total) confirmed contiguous from the start
+    let mut next_to_send: usize = 0; // every chunk below this has been transmitted at least once
+    let mut stale_rounds: u32 = 0; // consecutive no-progress ACK reads (see retransmit gating below)
     let window = params.window as usize;
 
     loop {
         if confirmed as usize >= total {
             break;
         }
-        // Send up to `window` frames ahead of the last confirmed point.
+        // Send frames up to `window` ahead of the confirmed point -- but
+        // each frame ONCE (tracked by `next_to_send`), never the whole
+        // window again per iteration. The previous version re-sent
+        // confirmed..confirmed+window every loop pass: on a slow link those
+        // duplicates pile into the host's TX queue AHEAD of genuinely new
+        // frames, so the device spends whole seconds receiving stale
+        // duplicates before anything new arrives -- measured live
+        // (2026-09-02, instrumented run): ~25 no-progress rounds between
+        // every 4-frame advance, ~30s per window, large pages timing out.
+        // Retransmission of lost frames happens ONLY in the no-progress
+        // branch below, one frame at a time, on actual evidence of loss.
         let send_upto = (confirmed as usize + window).min(total);
-        for seq in confirmed as usize..send_upto {
-            let frame = protocol::build_data_frame(seq as u8, chunks[seq]);
+        while next_to_send < send_upto {
+            let frame = protocol::build_data_frame(next_to_send as u8, chunks[next_to_send]);
             peripheral.write(&ch, &frame, WriteType::WithoutResponse).await.context("writing DATA frame")?;
+            next_to_send += 1;
         }
 
         match wait_for_data_ack(&mut notifications).await {
@@ -419,12 +432,31 @@ async fn run_pipe_write(
                                 break; // wrapped past 256, shouldn't happen given the size guard above
                             }
                         }
+                        eprintln!(
+                            "  data: confirmed {confirmed}->{c}/{total} (ack highest={} mask={:#010x})",
+                            ack.highest_seen, ack.mask
+                        );
                         if c != confirmed {
                             confirmed = c;
+                            stale_rounds = 0;
                         } else {
-                            // No progress even from the newest ACK -- retransmit the oldest unacked frame.
-                            let frame = protocol::build_data_frame(confirmed, chunks[confirmed as usize]);
-                            peripheral.write(&ch, &frame, WriteType::WithoutResponse).await?;
+                            // No progress from the newest ACK. Don't retransmit
+                            // on the FIRST stale read: the device SACKs only
+                            // every Nth new frame, and it also re-SACKs its
+                            // current state when it receives a duplicate -- so
+                            // an eager retransmit here begets another stale
+                            // ACK, sustaining a mini-loop of duplicates until
+                            // the genuinely new SACK surfaces (measured: ~3-8
+                            // wasted rounds per window). Retransmit only after
+                            // two consecutive stale reads, which distinguishes
+                            // "the next SACK is still in flight" from "a frame
+                            // was actually lost".
+                            stale_rounds += 1;
+                            if stale_rounds >= 2 {
+                                let frame = protocol::build_data_frame(confirmed, chunks[confirmed as usize]);
+                                peripheral.write(&ch, &frame, WriteType::WithoutResponse).await?;
+                                stale_rounds = 0;
+                            }
                         }
                     }
                     DataResponse::Nack { err, .. } => bail!("PIPE_WRITE_DATA NACKed, err=0x{err:02x}"),
