@@ -1,0 +1,9 @@
+[
+  {
+    "icon": "bin",
+    "day": "Wednesday",
+    "options": ["recycling", "waste"],
+    "current": "recycling",
+    "since": "2026-09-03"
+  }
+]

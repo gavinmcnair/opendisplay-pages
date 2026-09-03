@@ -11,7 +11,6 @@ use futures::future::LocalBoxFuture;
 use image::{GrayImage, Luma};
 use imageproc::drawing::draw_line_segment_mut;
 
-use crate::bins;
 use crate::calendar::{self, Event};
 use crate::plugin::{self, Plugin};
 use crate::render::{self, truncate_to_width, Fonts, BLACK, DARK_GRAY, H, LIGHT_GRAY, W, WHITE};
@@ -20,11 +19,6 @@ pub const SLOT: u8 = 5;
 const NAME: &str = "Egham Week Ahead";
 const STATUS_LABEL: &str = "7-DAY CALENDAR";
 const DAYS_AHEAD: i64 = 7;
-/// Wider than the display window: the status-bar bin indicator (chrome on
-/// every page) needs the next fortnightly collection, which can be up to
-/// ~2 weeks out. This plugin renders every poll tick regardless of what's
-/// on screen, so it's the natural place to keep the bin schedule fresh.
-const BIN_SCAN_DAYS: i64 = 21;
 
 pub struct CalendarWeekPlugin;
 
@@ -39,16 +33,9 @@ impl Plugin for CalendarWeekPlugin {
 
     fn render<'a>(&'a mut self, fonts: &'a Fonts) -> LocalBoxFuture<'a, Result<(u64, GrayImage)>> {
         Box::pin(async move {
-            // Fetch the fortnight for the bin indicator, then narrow to the
-            // 7-day grid for display + fingerprint so events beyond the
-            // visible week don't cause spurious repushes of this page.
-            let all = calendar::fetch_events(BIN_SCAN_DAYS)?;
-            refresh_bin_schedule(&all);
-
-            let horizon = (Local::now() + Duration::days(DAYS_AHEAD)).format("%Y-%m-%d").to_string();
-            let shown: Vec<Event> = all.into_iter().filter(|e| e.start.ymd() < horizon.as_str()).collect();
-            let fingerprint = calendar::fingerprint(&shown);
-            let img = render_page(fonts, &shown);
+            let events = calendar::fetch_events(DAYS_AHEAD)?;
+            let fingerprint = calendar::fingerprint(&events);
+            let img = render_page(fonts, &events);
             Ok((fingerprint, img))
         })
     }
@@ -58,20 +45,6 @@ impl Plugin for CalendarWeekPlugin {
     fn setup(&mut self) -> Result<()> {
         calendar::run_oauth_flow()
     }
-}
-
-/// Extract the bin-collection events (all-day "Recycling/Rubbish day at
-/// Egham") and hand them to `bins` to persist for the status-bar chrome.
-fn refresh_bin_schedule(events: &[Event]) {
-    let bin_events: Vec<(chrono::NaiveDate, bins::BinType)> = events
-        .iter()
-        .filter_map(|e| {
-            let ty = bins::classify(&e.summary)?;
-            let date = e.start.ymd().parse::<chrono::NaiveDate>().ok()?;
-            Some((date, ty))
-        })
-        .collect();
-    bins::record_schedule(&bin_events);
 }
 
 fn render_page(fonts: &Fonts, events: &[Event]) -> GrayImage {

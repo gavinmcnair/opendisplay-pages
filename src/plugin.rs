@@ -94,13 +94,20 @@ pub fn draw_status_bar(img: &mut GrayImage, fonts: &Fonts, slot: u8, updated_at:
     let updated = format!("UPDATED {updated_at}");
     let uw = render::draw_text(img, &fonts.mono, 13.0, 26.0, 460.0 + 13.0, &updated, DARK_GRAY);
 
-    // Next bin collection, after the UPDATED time: a bin glyph + WASTE /
-    // RECYCLE (from Google Calendar via `bins`, flips on Wednesday). Chrome
-    // like the battery/signal icons -- shown when known, never causes a push.
-    if let Some(bin) = crate::bins::next_type() {
-        let bx = 26.0 + uw + 22.0;
-        draw_bin_icon(img, bx, 461.0);
-        render::draw_text(img, &fonts.sans_bold, 13.0, bx + 15.0, 460.0 + 13.0, bin.label(), DARK_GRAY);
+    // Weekly-cycling indicators after the UPDATED time -- generic
+    // (optional icon + current option) from `onceaweek_schedule.txt`; the
+    // bin is the motivating one. Chrome like the battery/signal icons:
+    // shown when configured, never causes a push. Stacks left-to-right.
+    let mut ix = 26.0 + uw + 22.0;
+    for ind in crate::onceaweek::indicators() {
+        if let Some(name) = &ind.icon {
+            let iw = draw_named_icon(img, name, ix, 461.0);
+            if iw > 0.0 {
+                ix += iw + 5.0;
+            }
+        }
+        let tw = render::draw_text(img, &fonts.sans_bold, 13.0, ix, 460.0 + 13.0, &ind.label, DARK_GRAY);
+        ix += tw + 18.0;
     }
 
     if !status_label.is_empty() {
@@ -133,6 +140,20 @@ pub fn draw_status_bar(img: &mut GrayImage, fonts: &Fonts, slot: u8, updated_at:
     render::draw_text(img, &fonts.sans_bold, 13.0, right - sw, 460.0 + 13.0, &slot_text, DARK_GRAY);
 
     render::quantize_to_4gray(img);
+}
+
+/// Draw a named status glyph (for a `onceaweek` indicator) with its
+/// top-left at (x, y); returns the width consumed, or 0.0 for an unknown
+/// name so the caller falls back to text only. Add an arm here to give a
+/// schedule entry an icon.
+fn draw_named_icon(img: &mut GrayImage, name: &str, x: f32, y: f32) -> f32 {
+    match name {
+        "bin" => {
+            draw_bin_icon(img, x, y);
+            11.0
+        }
+        _ => 0.0,
+    }
 }
 
 /// A small wheelie-bin glyph (~11x13) with its top-left at (x, y): a lid
