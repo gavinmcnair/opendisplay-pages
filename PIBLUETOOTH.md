@@ -114,6 +114,33 @@ Why macOS masked both bugs: ~15ms connection intervals drained queues and
 duplicates so fast the pathologies never accumulated. BlueZ at 30–100ms
 intervals turned them fatal.
 
+## 4a. The slow death: D-Bus connection leak (fixed 2026-09-03)
+
+Symptom: everything works for a few hours, then **all** updates stop, and
+every tick logs `creating BLE manager: The maximum number of active
+connections for UID 0 has been reached`. The train feed and rendering are
+fine — it dies at the very first BLE step, before any radio activity.
+
+Cause: calling `Manager::new()` per operation. On Linux each Manager opens
+a D-Bus connection btleplug doesn't release on drop (~1.2 leaked sockets
+per push/switch/telemetry-read), hitting the system bus's default
+256-per-user cap in a few hours. CoreBluetooth has no equivalent, so it
+never showed on the Mac.
+
+Fix (in `ble.rs`): one process-lifetime `Manager`+`Adapter` in a
+`OnceCell`, reused everywhere. Diagnose/verify by watching FD count while
+exercising BLE ops:
+
+```bash
+PID=$(systemctl show -p MainPID --value egham-ble)
+ls /proc/$PID/fd | wc -l         # before
+# ...trigger several switches/pushes...
+ls /proc/$PID/fd | wc -l         # must be FLAT, not climbing
+```
+
+Emergency recovery if it ever regresses: `systemctl restart egham-ble`
+drops the process and all leaked connections instantly.
+
 ## 5. When the panel itself is the problem
 
 Two firmware wedge modes (fixes belong in the Firmware fork, still TODO):
