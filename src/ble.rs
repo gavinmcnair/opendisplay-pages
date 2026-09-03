@@ -56,6 +56,30 @@ const REQ_ACK_EVERY: u8 = 4;
 
 const OP_TIMEOUT: Duration = Duration::from_secs(180);
 
+/// The BLE Manager+Adapter, created ONCE for the process lifetime and
+/// reused for every operation. Critical on Linux/BlueZ: each
+/// `Manager::new()` opens a D-Bus connection that btleplug does NOT release
+/// when the Manager drops, so creating one per push/switch/telemetry-read
+/// leaked ~1.2 D-Bus sockets per operation and hit the system bus's default
+/// 256-per-user cap in a few hours -- every BLE op then failed at "creating
+/// BLE manager: maximum number of active connections for UID 0 reached"
+/// (observed live on the Pi, 2026-09-03; invisible on macOS/CoreBluetooth,
+/// which has no such per-op resource). The Manager is kept in the tuple
+/// purely to hold it alive alongside the Adapter it owns.
+static BLE: tokio::sync::OnceCell<(Manager, btleplug::platform::Adapter)> = tokio::sync::OnceCell::const_new();
+
+async fn adapter() -> Result<&'static btleplug::platform::Adapter> {
+    let (_manager, adapter) = BLE
+        .get_or_try_init(|| async {
+            let manager = Manager::new().await.context("creating BLE manager")?;
+            let adapters = manager.adapters().await.context("listing BLE adapters")?;
+            let adapter = adapters.into_iter().next().ok_or_else(|| anyhow!("no BLE adapter found"))?;
+            Ok::<_, anyhow::Error>((manager, adapter))
+        })
+        .await?;
+    Ok(adapter)
+}
+
 pub async fn find_and_connect(device_name: &str) -> Result<Peripheral> {
     Ok(find_and_connect_with_rssi(device_name).await?.0)
 }
@@ -66,9 +90,7 @@ pub async fn find_and_connect(device_name: &str) -> Result<Peripheral> {
 /// (btleplug has no cross-platform connected-RSSI read). `None` when the
 /// platform didn't attach an RSSI to the advertisement.
 pub async fn find_and_connect_with_rssi(device_name: &str) -> Result<(Peripheral, Option<i16>)> {
-    let manager = Manager::new().await.context("creating BLE manager")?;
-    let adapters = manager.adapters().await.context("listing BLE adapters")?;
-    let adapter = adapters.into_iter().next().ok_or_else(|| anyhow!("no BLE adapter found"))?;
+    let adapter = adapter().await?;
 
     adapter.start_scan(ScanFilter::default()).await.context("starting BLE scan")?;
 
@@ -82,7 +104,7 @@ pub async fn find_and_connect_with_rssi(device_name: &str) -> Result<(Peripheral
     let mut seen: Option<(Peripheral, Option<i16>)> = None;
     let mut rssi_deadline: Option<tokio::time::Instant> = None;
     let (peripheral, rssi) = loop {
-        if let Some((p, r)) = find_by_name(&adapter, device_name).await? {
+        if let Some((p, r)) = find_by_name(adapter, device_name).await? {
             if r.is_some() {
                 let _ = adapter.stop_scan().await;
                 break (p, r);
@@ -145,7 +167,7 @@ pub async fn find_and_connect_with_rssi(device_name: &str) -> Result<(Peripheral
                     eprintln!("BLE connect attempt {attempt}/{CONNECT_ATTEMPTS} failed ({last_err:#}); retrying");
                     tokio::time::sleep(Duration::from_secs(3)).await;
                     // Fresh lookup -- the previous object may be stale.
-                    if let Ok(Some((p, _))) = find_by_name(&adapter, device_name).await {
+                    if let Ok(Some((p, _))) = find_by_name(adapter, device_name).await {
                         target = p;
                     }
                 }
