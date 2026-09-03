@@ -92,7 +92,16 @@ pub fn draw_status_bar(img: &mut GrayImage, fonts: &Fonts, slot: u8, updated_at:
     }
 
     let updated = format!("UPDATED {updated_at}");
-    render::draw_text(img, &fonts.mono, 13.0, 26.0, 460.0 + 13.0, &updated, DARK_GRAY);
+    let uw = render::draw_text(img, &fonts.mono, 13.0, 26.0, 460.0 + 13.0, &updated, DARK_GRAY);
+
+    // Next bin collection, after the UPDATED time: a bin glyph + WASTE /
+    // RECYCLE (from Google Calendar via `bins`, flips on Wednesday). Chrome
+    // like the battery/signal icons -- shown when known, never causes a push.
+    if let Some(bin) = crate::bins::next_type() {
+        let bx = 26.0 + uw + 22.0;
+        draw_bin_icon(img, bx, 461.0);
+        render::draw_text(img, &fonts.sans_bold, 13.0, bx + 15.0, 460.0 + 13.0, bin.label(), DARK_GRAY);
+    }
 
     if !status_label.is_empty() {
         let label_w = render::text_width(&fonts.sans_bold, 13.0, status_label);
@@ -124,6 +133,23 @@ pub fn draw_status_bar(img: &mut GrayImage, fonts: &Fonts, slot: u8, updated_at:
     render::draw_text(img, &fonts.sans_bold, 13.0, right - sw, 460.0 + 13.0, &slot_text, DARK_GRAY);
 
     render::quantize_to_4gray(img);
+}
+
+/// A small wheelie-bin glyph (~11x13) with its top-left at (x, y): a lid
+/// with a handle nub, and a lightly-ridged body. Solid black, matching the
+/// flat no-gradient style of the weather/battery icons.
+fn draw_bin_icon(img: &mut GrayImage, x: f32, y: f32) {
+    let (x, y) = (x as i32, y as i32);
+    // handle nub on top of the lid
+    draw_filled_rect_mut(img, Rect::at(x + 3, y).of_size(5, 2), Luma([BLACK]));
+    // lid (slightly wider than the body)
+    draw_filled_rect_mut(img, Rect::at(x, y + 2, ).of_size(11, 2), Luma([BLACK]));
+    // body outline, then hollowed white, then vertical ridges
+    draw_filled_rect_mut(img, Rect::at(x + 1, y + 4).of_size(9, 9), Luma([BLACK]));
+    draw_filled_rect_mut(img, Rect::at(x + 2, y + 5).of_size(7, 7), Luma([WHITE]));
+    for dx in [4, 6] {
+        draw_filled_rect_mut(img, Rect::at(x + dx, y + 5).of_size(1, 7), Luma([BLACK]));
+    }
 }
 
 /// Filled-bar count for an RSSI, 0-4 -- the usual BLE rules of thumb

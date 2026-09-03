@@ -1,5 +1,6 @@
 mod air_quality;
 mod battery;
+mod bins;
 mod ble;
 mod calendar;
 mod chart;
