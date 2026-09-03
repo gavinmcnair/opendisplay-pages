@@ -3,9 +3,13 @@
 //! the API itself handles GMT/BST so this file never has to.
 
 use anyhow::{Context, Result};
+use chrono::Local;
 use serde::Deserialize;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
+
+/// Hours shown in the rolling forecast window (see `current_hour_index`).
+pub const WINDOW_HOURS: usize = 24;
 
 // Egham, Surrey.
 const LATITUDE: f64 = 51.4295;
@@ -38,11 +42,13 @@ pub struct Forecast {
 }
 
 pub fn fetch_forecast() -> Result<Forecast> {
+    // 2 days (48 hourly points): enough that a full WINDOW_HOURS-ahead
+    // window still fits even at 23:00, when it spills well into tomorrow.
     let url = format!(
         "https://api.open-meteo.com/v1/forecast?latitude={LATITUDE}&longitude={LONGITUDE}\
          &current=temperature_2m,weather_code\
          &hourly=temperature_2m,precipitation_probability,relative_humidity_2m,surface_pressure\
-         &timezone=Europe%2FLondon&forecast_days=1"
+         &timezone=Europe%2FLondon&forecast_days=2"
     );
     let resp: Forecast = ureq::get(&url)
         .call()
@@ -52,22 +58,38 @@ pub fn fetch_forecast() -> Result<Forecast> {
     Ok(resp)
 }
 
-/// Fingerprints the meaningful values (current conditions + hourly
-/// temperature, rain probability, humidity, pressure) -- excludes nothing
-/// here deliberately, since unlike RTT's `query.time_from` this response has
-/// no "generated at" field that would otherwise make every poll look like a
-/// change.
-pub fn fingerprint(forecast: &Forecast) -> u64 {
+/// Index of the current wall-clock hour within `hourly.time`, so the chart
+/// can roll forward and show only the hours still ahead (no point showing
+/// what the weather WAS). Sound because both sides use Europe/London: the
+/// API request sets `timezone=Europe/London` and the process runs with
+/// `TZ=Europe/London`, so `chrono::Local` and the returned timestamps
+/// agree. Falls back to 0 (midnight) if no match -- a clock/tz mismatch
+/// degrades to the old full-day view rather than erroring.
+pub fn current_hour_index(hourly: &Hourly) -> usize {
+    let now_hour = Local::now().format("%Y-%m-%dT%H").to_string(); // e.g. "2026-09-03T14"
+    hourly
+        .time
+        .iter()
+        .position(|t| t.len() >= 13 && t[..13].as_ref() as &str >= now_hour.as_str())
+        .unwrap_or(0)
+}
+
+/// Fingerprints exactly the displayed window (current conditions + the
+/// `WINDOW_HOURS` of temperature/rain starting at `start`) PLUS `start`
+/// itself -- so the panel repaints when the window rolls to a new hour even
+/// if the forecast numbers are unchanged, and does NOT repaint for changes
+/// to hours that have scrolled off or aren't shown.
+pub fn fingerprint_window(forecast: &Forecast, start: usize, hours: usize) -> u64 {
     let mut hasher = DefaultHasher::new();
     forecast.current.temperature_2m.to_bits().hash(&mut hasher);
     forecast.current.weather_code.hash(&mut hasher);
-    for t in &forecast.hourly.temperature_2m {
-        t.to_bits().hash(&mut hasher);
-    }
-    forecast.hourly.precipitation_probability.hash(&mut hasher);
-    forecast.hourly.relative_humidity_2m.hash(&mut hasher);
-    for p in &forecast.hourly.surface_pressure {
-        p.to_bits().hash(&mut hasher);
+    start.hash(&mut hasher);
+    let temps = &forecast.hourly.temperature_2m;
+    let rain = &forecast.hourly.precipitation_probability;
+    let end = (start + hours).min(temps.len()).min(rain.len());
+    for i in start..end {
+        temps[i].to_bits().hash(&mut hasher);
+        rain[i].hash(&mut hasher);
     }
     hasher.finish()
 }

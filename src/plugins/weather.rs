@@ -32,31 +32,34 @@ impl Plugin for WeatherPlugin {
     fn render<'a>(&'a mut self, fonts: &'a Fonts) -> LocalBoxFuture<'a, Result<(u64, GrayImage)>> {
         Box::pin(async move {
             let forecast = weather::fetch_forecast()?;
-            let fingerprint = weather::fingerprint(&forecast);
-            let img = render_page(fonts, &forecast);
+            let start = weather::current_hour_index(&forecast.hourly);
+            let fingerprint = weather::fingerprint_window(&forecast, start, weather::WINDOW_HOURS);
+            let img = render_page(fonts, &forecast, start);
             Ok((fingerprint, img))
         })
     }
 }
 
-fn render_page(fonts: &Fonts, forecast: &Forecast) -> GrayImage {
+fn render_page(fonts: &Fonts, forecast: &Forecast, start: usize) -> GrayImage {
     let mut img = GrayImage::from_pixel(W, H, Luma([WHITE]));
     let hourly = &forecast.hourly;
-    let n = hourly.time.len().min(hourly.temperature_2m.len()).min(hourly.precipitation_probability.len());
+    let avail = hourly.time.len().min(hourly.temperature_2m.len()).min(hourly.precipitation_probability.len());
+    // Rolling window: the WINDOW_HOURS still ahead, starting at the current
+    // hour -- past hours scroll off the left as the day goes on.
+    let start = start.min(avail);
+    let hours = weather::WINDOW_HOURS.min(avail - start);
 
     render::draw_text(&mut img, &fonts.sans_bold, 13.0, 26.0, 22.0 + 13.0, "EGHAM WEATHER", DARK_GRAY);
     render::draw_text(&mut img, &fonts.sans_black, 40.0, 26.0, 76.0, "WEATHER", BLACK);
 
-    // Summary computed from the whole day's range, not "the current hour" --
-    // Open-Meteo returns local (Europe/London) timestamps, but figuring out
-    // which array index is "now" needs real timezone handling this project
-    // doesn't otherwise need; a day's min/max is simple, needs no clock at
-    // all, and is arguably more useful at a glance anyway.
-    if n > 0 {
-        let min_t = hourly.temperature_2m[..n].iter().cloned().fold(f32::INFINITY, f32::min);
-        let max_t = hourly.temperature_2m[..n].iter().cloned().fold(f32::NEG_INFINITY, f32::max);
-        let max_rain = hourly.precipitation_probability[..n].iter().copied().max().unwrap_or(0);
-        let summary = format!("TODAY {min_t:.0}-{max_t:.0}C  UP TO {max_rain}% RAIN");
+    // Summary over the upcoming window, not the calendar day -- matches the
+    // rolling chart below (both answer "what's coming", never "what was").
+    if hours > 0 {
+        let win = start..start + hours;
+        let min_t = hourly.temperature_2m[win.clone()].iter().cloned().fold(f32::INFINITY, f32::min);
+        let max_t = hourly.temperature_2m[win.clone()].iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+        let max_rain = hourly.precipitation_probability[win].iter().copied().max().unwrap_or(0);
+        let summary = format!("NEXT {hours}H  {min_t:.0}-{max_t:.0}C  UP TO {max_rain}% RAIN");
         render::draw_text(&mut img, &fonts.sans_bold, 15.0, 26.0, 98.0, &summary, DARK_GRAY);
     }
 
@@ -71,7 +74,7 @@ fn render_page(fonts: &Fonts, forecast: &Forecast) -> GrayImage {
     draw_line_segment_mut(&mut img, (0.0, 119.0), (W as f32, 119.0), Luma([BLACK]));
     draw_line_segment_mut(&mut img, (0.0, 120.0), (W as f32, 120.0), Luma([BLACK]));
 
-    draw_rain_chart(&mut img, fonts, hourly, n);
+    draw_rain_chart(&mut img, fonts, hourly, start, hours);
 
     // NOT hourly.time[0] -- that's always this forecast's midnight entry,
     // not when we actually fetched it (a real bug caught by looking at the
@@ -80,10 +83,15 @@ fn render_page(fonts: &Fonts, forecast: &Forecast) -> GrayImage {
     img
 }
 
-fn draw_rain_chart(img: &mut GrayImage, fonts: &Fonts, hourly: &weather::Hourly, n: usize) {
-    if n == 0 {
+/// Draws the rolling rain chart: `hours` bars starting at data index
+/// `start` (the current hour). Visual position `vis` runs 0..hours across
+/// the chart width; the data index is `start + vis`, so past hours simply
+/// aren't drawn.
+fn draw_rain_chart(img: &mut GrayImage, fonts: &Fonts, hourly: &weather::Hourly, start: usize, hours: usize) {
+    if hours == 0 {
         return;
     }
+    let n = hours;
     let chart_x0 = 40.0;
     let chart_x1 = W as f32 - 40.0;
     let chart_top = 150.0; // 100% rain line
@@ -116,7 +124,8 @@ fn draw_rain_chart(img: &mut GrayImage, fonts: &Fonts, hourly: &weather::Hourly,
     let bar_w = (slot_w * 0.6).max(1.0);
 
     for i in 0..n {
-        let prob = hourly.precipitation_probability[i].min(100) as f32;
+        let idx = start + i; // data index; `i` is the on-screen position
+        let prob = hourly.precipitation_probability[idx].min(100) as f32;
         let bar_h = chart_h * (prob / 100.0);
         let x0 = chart_x0 + i as f32 * slot_w + (slot_w - bar_w) / 2.0;
         let y0 = baseline - bar_h;
@@ -131,12 +140,12 @@ fn draw_rain_chart(img: &mut GrayImage, fonts: &Fonts, hourly: &weather::Hourly,
         // Every 3rd hour: hour label below the baseline, temperature above
         // the bar. Labelling every hour at this width would overlap.
         if i % 3 == 0 {
-            let hour_label = &weather::hhmm(&hourly.time[i])[0..2];
+            let hour_label = &weather::hhmm(&hourly.time[idx])[0..2];
             let hlw = text_width(&fonts.mono, 13.0, hour_label);
             let cx = chart_x0 + i as f32 * slot_w + slot_w / 2.0;
             render::draw_text(img, &fonts.mono, 13.0, cx - hlw / 2.0, baseline + 18.0, hour_label, DARK_GRAY);
 
-            let temp = hourly.temperature_2m.get(i).copied().unwrap_or(0.0);
+            let temp = hourly.temperature_2m.get(idx).copied().unwrap_or(0.0);
             // "C" suffix isn't cosmetic here -- a bare number sitting inside
             // a 0-100 rain-% chart reads as another percentage at a glance
             // (a real ambiguity, not a hypothetical one: caught by exactly
