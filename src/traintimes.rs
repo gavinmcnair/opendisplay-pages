@@ -89,27 +89,29 @@ pub(crate) fn hash_call(c: &StationCall, hasher: &mut DefaultHasher) {
 }
 
 /// Departures from Egham heading toward `to` (optionally, additionally
-/// via `via`) -- soonest first, already trimmed server-side to what's
-/// realistically still catchable (`catchable_only`, see API.md: excludes a
-/// call whose most-authoritative known time is more than 5 minutes in the
-/// past, using the live estimate so a delayed train stays visible past its
-/// original schedule) -- replaces the client-side `has_departed`/wall-clock
-/// check the old RTT client needed, since RTT didn't offer this filter
-/// server-side.
+/// via `via`) -- soonest first, trimmed server-side to what hasn't gone yet
+/// via `upcoming_only` (excludes calls whose `stop_status` is
+/// Departed/Arrived) -- replaces the client-side `has_departed`/wall-clock
+/// check the old RTT client needed.
 ///
-/// Hits `/v1/calls?from={STATION}&to=...&via=...` (2026-08-31: replaced the
-/// old separate `/v1/departures?crs=`/`/v1/arrivals?crs=` endpoints, which
-/// now 404 outright -- see `client/traintimes_client.py` in that repo,
-/// which this mirrors). `to`/`via` are an always-independent AND, resolved
-/// server-side by STANOX group (e.g. `to=WAT` matches every Waterloo
-/// TIPLOC, not just whichever one CORPUS happens to tag `WAT` onto
-/// directly) -- `plugins::trains` calls this once per physical platform
-/// with Egham-specific anchors (Waterloo via Richmond one way, Chertsey the
-/// other) instead of fetching everything and guessing direction from the
-/// `platform` field locally, since that field can be unconfirmed and flip a
-/// train between columns for no real reason.
+/// `upcoming_only`, not the old `catchable_only` (2026-09-05: the v2 service
+/// removed the latter and 400s on it). `catchable_only` was a clock-based
+/// workaround -- hide any call whose best-known time was >5min past -- for a
+/// feed whose statuses went stale; v2 keeps each call's status current, so
+/// `upcoming_only` answers "still catchable?" from the reported status
+/// rather than from a clock. For a departure board that's the same intent,
+/// done better.
+///
+/// Hits `/v1/calls?from={STATION}&to=...&via=...` -- `to`/`via` are an
+/// always-independent AND, resolved server-side by STANOX group (e.g.
+/// `to=WAT` matches every Waterloo TIPLOC, not just whichever one CORPUS
+/// tags `WAT` onto directly). `plugins::trains` calls this once per physical
+/// platform with Egham-specific anchors (Waterloo via Richmond one way,
+/// Chertsey the other) instead of fetching everything and guessing direction
+/// from the `platform` field, which can be unconfirmed and flip a train
+/// between columns for no real reason.
 pub fn fetch_departures(to: &str, via: Option<&str>) -> Result<Vec<StationCall>> {
-    let mut url = format!("{}/v1/calls?from={STATION}&to={to}&catchable_only=true", base_url());
+    let mut url = format!("{}/v1/calls?from={STATION}&to={to}&upcoming_only=true", base_url());
     if let Some(via) = via {
         url.push_str(&format!("&via={via}"));
     }
